@@ -24,6 +24,13 @@ doppler secrets set AUTH_GOOGLE_ID
 doppler secrets set AUTH_GOOGLE_SECRET
 ```
 
+To give coaches access to grade review, set `REVIEWER_EMAILS` to a
+comma-separated list of their Google account emails:
+
+```bash
+doppler secrets set REVIEWER_EMAILS
+```
+
 In Google Cloud, set the authorized redirect URI to:
 
 ```text
@@ -57,9 +64,20 @@ project uses a different vision-capable model.
 ```bash
 npm run dev       # frontend and API with hot reload
 npm run check     # TypeScript check
+npm test          # climb workflow and permission tests
 npm run build     # check types and build the frontend
 npm run start:api # run the API without watch mode
 ```
+
+## Climb workflow
+
+- Climbers can save incomplete drafts and update their own climbs. Publishing
+  for review requires every climb field to be completed.
+- Drafts and review feedback stay private to their owner. Configured reviewers
+  see only complete climbs that have been published for review.
+- Reviewers can approve the submitted grade or return a reviewed grade with
+  feedback. A reviewer cannot review their own climb.
+- Approved climbs are locked to preserve the review record.
 
 ## Where to work
 
@@ -70,7 +88,8 @@ npm run start:api # run the API without watch mode
 - `server/index.ts` — Express entry point
 
 The demo data is intentionally in memory and resets whenever the API restarts.
-Add a database only when the frontend shape and persistence needs are clear.
+The save/update/review workflow persists for the life of the API process; add a
+database before treating it as durable production storage.
 
 ## Railway deployment
 
@@ -86,7 +105,7 @@ Create two services in one Railway project and configure them as follows:
 | Healthcheck path | `/health` | `/health` |
 | Pre-deploy command | `npm run migrate --if-present` | none |
 | Service variable | `CORS_ORIGIN=https://<frontend-domain>` | `VITE_API_URL=https://<backend-domain>` |
-| Auth variables | `AUTH_SECRET`, `AUTH_GOOGLE_ID`, `AUTH_GOOGLE_SECRET` | none |
+| Auth variables | `AUTH_SECRET`, `AUTH_GOOGLE_ID`, `AUTH_GOOGLE_SECRET`, `REVIEWER_EMAILS` | none |
 
 Use the final public domains, including `https://` and without a trailing slash.
 Also add `https://<backend-domain>/auth/callback/google` as an authorized
