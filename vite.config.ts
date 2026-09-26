@@ -6,11 +6,11 @@ export default defineConfig({
   server: {
     proxy: {
       '/auth': {
-        target: 'http://localhost:3001',
+        target: `http://localhost:${process.env.API_PORT ?? '3001'}`,
         changeOrigin: false,
       },
       '/trpc': {
-        target: 'http://localhost:3001',
+        target: `http://localhost:${process.env.API_PORT ?? '3001'}`,
         changeOrigin: false,
       },
     },
