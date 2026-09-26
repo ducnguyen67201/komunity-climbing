@@ -1,0 +1,17 @@
+FROM node:24-alpine
+
+WORKDIR /app
+
+COPY package.json package-lock.json ./
+RUN npm ci --omit=dev && npm cache clean --force
+
+COPY --chown=node:node . .
+
+ENV NODE_ENV=production
+USER node
+
+EXPOSE 3001
+HEALTHCHECK --interval=30s --timeout=3s --start-period=10s --retries=3 \
+  CMD wget --quiet --tries=1 --spider "http://127.0.0.1:${PORT:-3001}/health" || exit 1
+
+CMD ["node", "server/index.ts"]
