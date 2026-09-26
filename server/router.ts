@@ -7,10 +7,18 @@ import type { Context } from './context'
 const t = initTRPC.context<Context>().create()
 
 const protectedProcedure = t.procedure.use(({ ctx, next }) => {
-  const ownerEmail = ctx.session?.user?.email
+  const user = ctx.session?.user
+  const ownerEmail = user?.email
   if (!ownerEmail) throw new TRPCError({ code: 'UNAUTHORIZED' })
 
-  return next({ ctx: { ...ctx, session: ctx.session, ownerEmail } })
+  return next({
+    ctx: {
+      ...ctx,
+      session: ctx.session,
+      ownerEmail,
+      ownerName: user.name ?? ownerEmail,
+    },
+  })
 })
 
 const pointInput = z.object({
@@ -63,10 +71,35 @@ const assignmentInput = z.object({
   role: z.enum(['hand', 'foot', 'start', 'finish']),
 })
 
-const climbDetailsInput = z.object({
-  name: z.string().trim().min(1, 'Name is required').max(80),
-  grade: z.string().trim().min(1, 'Grade is required').max(12),
-  assignments: z.array(assignmentInput).min(2, 'Choose at least two holds').max(240),
+const editableClimbStatus = z.enum(['draft', 'submitted'])
+const climbStatus = z.enum([
+  'draft',
+  'submitted',
+  'changes_requested',
+  'approved',
+])
+const climbDetailsShape = {
+  name: z.string().trim().max(80),
+  grade: z.string().trim().max(12),
+  assignments: z.array(assignmentInput).max(240),
+  status: editableClimbStatus,
+}
+
+const createClimbInput = z.object({
+  wallId: z.string().uuid(),
+  ...climbDetailsShape,
+})
+
+const updateClimbInput = z.object({
+  id: z.string().uuid(),
+  ...climbDetailsShape,
+})
+
+const reviewClimbInput = z.object({
+  id: z.string().uuid(),
+  decision: z.enum(['approve', 'request_changes']),
+  grade: z.string().trim().min(1, 'Reviewed grade is required').max(12),
+  comment: z.string().trim().max(500),
 })
 
 type Wall = z.infer<typeof wallCreateInput> & {
@@ -76,10 +109,23 @@ type Wall = z.infer<typeof wallCreateInput> & {
   updatedAt: string
 }
 
-type Climb = z.infer<typeof climbDetailsInput> & {
+type Climb = {
   id: string
   wallId: string
+  name: string
+  grade: string
+  assignments: Array<z.infer<typeof assignmentInput>>
   ownerEmail: string
+  ownerName: string
+  status: z.infer<typeof climbStatus>
+  review: {
+    decision: z.infer<typeof reviewClimbInput>['decision']
+    grade: string
+    comment: string
+    reviewerEmail: string
+    reviewerName: string
+    reviewedAt: string
+  } | null
   createdAt: string
   updatedAt: string
 }
@@ -91,8 +137,31 @@ function publicWall({ ownerEmail: _ownerEmail, ...wall }: Wall) {
   return wall
 }
 
-function publicClimb({ ownerEmail: _ownerEmail, ...climb }: Climb) {
-  return climb
+function publicClimb(climb: Climb, viewerEmail: string) {
+  const wall = walls.find((item) => item.id === climb.wallId)
+
+  return {
+    id: climb.id,
+    wallId: climb.wallId,
+    wallName: wall?.name ?? 'Unknown wall',
+    name: climb.name,
+    grade: climb.grade,
+    assignments: climb.assignments,
+    ownerName: climb.ownerName,
+    isOwner: climb.ownerEmail === viewerEmail,
+    status: climb.status,
+    review: climb.review
+      ? {
+          decision: climb.review.decision,
+          grade: climb.review.grade,
+          comment: climb.review.comment,
+          reviewerName: climb.review.reviewerName,
+          reviewedAt: climb.review.reviewedAt,
+        }
+      : null,
+    createdAt: climb.createdAt,
+    updatedAt: climb.updatedAt,
+  }
 }
 
 function findWall(ownerEmail: string, id: string) {
@@ -107,7 +176,11 @@ function findClimb(ownerEmail: string, id: string) {
   return climb
 }
 
-function validateAssignments(wall: Wall, assignments: z.infer<typeof assignmentInput>[]) {
+function validateAssignments(
+  wall: Wall,
+  assignments: z.infer<typeof assignmentInput>[],
+  requireComplete: boolean,
+) {
   const holdIds = new Set(wall.holds.map((hold) => hold.id))
   const seen = new Set<string>()
   for (const assignment of assignments) {
@@ -122,12 +195,47 @@ function validateAssignments(wall: Wall, assignments: z.infer<typeof assignmentI
     }
     seen.add(assignment.holdId)
   }
+  if (!requireComplete) return
+  if (assignments.length < 2) {
+    throw new TRPCError({
+      code: 'BAD_REQUEST',
+      message: 'Choose at least two holds before publishing',
+    })
+  }
   if (!assignments.some((assignment) => assignment.role === 'start')) {
-    throw new TRPCError({ code: 'BAD_REQUEST', message: 'Choose at least one start hold' })
+    throw new TRPCError({
+      code: 'BAD_REQUEST',
+      message: 'Choose at least one start hold before publishing',
+    })
   }
   if (!assignments.some((assignment) => assignment.role === 'finish')) {
-    throw new TRPCError({ code: 'BAD_REQUEST', message: 'Choose at least one finish hold' })
+    throw new TRPCError({
+      code: 'BAD_REQUEST',
+      message: 'Choose at least one finish hold before publishing',
+    })
   }
+}
+
+function validateClimbForPublish(
+  wall: Wall,
+  climb: Pick<Climb, 'name' | 'grade' | 'assignments' | 'status'>,
+) {
+  const isPublishing = climb.status === 'submitted'
+
+  if (isPublishing && !climb.name) {
+    throw new TRPCError({
+      code: 'BAD_REQUEST',
+      message: 'Climb name is required before publishing',
+    })
+  }
+  if (isPublishing && !climb.grade) {
+    throw new TRPCError({
+      code: 'BAD_REQUEST',
+      message: 'Grade is required before publishing',
+    })
+  }
+
+  validateAssignments(wall, climb.assignments, isPublishing)
 }
 
 const wallDetectionInput = z.object({
@@ -149,6 +257,7 @@ export const appRouter = t.router({
     session: t.procedure.query(({ ctx }) => ({
       configured: ctx.authConfigured,
       user: ctx.session?.user ?? null,
+      canReview: ctx.canReview,
     })),
   }),
   wall: t.router({
@@ -234,37 +343,95 @@ export const appRouter = t.router({
   climbs: t.router({
     list: protectedProcedure.query(({ ctx }) =>
       climbs
-        .filter((climb) => climb.ownerEmail === ctx.ownerEmail)
+        .filter(
+          (climb) =>
+            climb.ownerEmail === ctx.ownerEmail ||
+            (ctx.canReview && climb.status === 'submitted'),
+        )
         .sort((a, b) => b.updatedAt.localeCompare(a.updatedAt))
-        .map(publicClimb),
+        .map((climb) => publicClimb(climb, ctx.ownerEmail)),
     ),
     create: protectedProcedure
-      .input(climbDetailsInput.extend({ wallId: z.string().uuid() }))
+      .input(createClimbInput)
       .mutation(({ ctx, input }) => {
         const wall = findWall(ctx.ownerEmail, input.wallId)
-        validateAssignments(wall, input.assignments)
+        validateClimbForPublish(wall, input)
         const now = new Date().toISOString()
         const climb: Climb = {
           id: crypto.randomUUID(),
           ownerEmail: ctx.ownerEmail,
+          ownerName: ctx.ownerName,
           ...input,
+          review: null,
           createdAt: now,
           updatedAt: now,
         }
         climbs.unshift(climb)
-        return publicClimb(climb)
+        return publicClimb(climb, ctx.ownerEmail)
       }),
     update: protectedProcedure
-      .input(climbDetailsInput.extend({ id: z.string().uuid() }))
+      .input(updateClimbInput)
       .mutation(({ ctx, input }) => {
         const climb = findClimb(ctx.ownerEmail, input.id)
+
+        if (climb.status === 'approved') {
+          throw new TRPCError({
+            code: 'BAD_REQUEST',
+            message: 'Approved climbs cannot be changed',
+          })
+        }
+
         const wall = findWall(ctx.ownerEmail, climb.wallId)
-        validateAssignments(wall, input.assignments)
+        validateClimbForPublish(wall, input)
         climb.name = input.name
         climb.grade = input.grade
         climb.assignments = input.assignments
+        climb.status = input.status
+        climb.review = null
         climb.updatedAt = new Date().toISOString()
-        return publicClimb(climb)
+        return publicClimb(climb, ctx.ownerEmail)
+      }),
+    review: protectedProcedure
+      .input(reviewClimbInput)
+      .mutation(({ ctx, input }) => {
+        if (!ctx.canReview) {
+          throw new TRPCError({
+            code: 'FORBIDDEN',
+            message: 'Reviewer access is required',
+          })
+        }
+
+        const climb = climbs.find((item) => item.id === input.id)
+        if (!climb) {
+          throw new TRPCError({ code: 'NOT_FOUND', message: 'Climb not found' })
+        }
+        if (climb.ownerEmail === ctx.ownerEmail) {
+          throw new TRPCError({
+            code: 'FORBIDDEN',
+            message: 'You cannot review your own climb',
+          })
+        }
+        if (climb.status !== 'submitted') {
+          throw new TRPCError({
+            code: 'BAD_REQUEST',
+            message: 'Only published climbs can be reviewed',
+          })
+        }
+
+        const reviewedAt = new Date().toISOString()
+        climb.status =
+          input.decision === 'approve' ? 'approved' : 'changes_requested'
+        climb.review = {
+          decision: input.decision,
+          grade: input.grade,
+          comment: input.comment,
+          reviewerEmail: ctx.ownerEmail,
+          reviewerName: ctx.ownerName,
+          reviewedAt,
+        }
+        climb.updatedAt = reviewedAt
+
+        return publicClimb(climb, ctx.ownerEmail)
       }),
     delete: protectedProcedure.input(z.object({ id: z.string().uuid() })).mutation(({ ctx, input }) => {
       const climbIndex = climbs.findIndex(

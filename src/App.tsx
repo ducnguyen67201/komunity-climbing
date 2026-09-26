@@ -37,6 +37,9 @@ import { applyHoldOutline, eraseHoldsAlongPath } from './wallOutline'
 
 type DetectionMode = 'ai' | 'local'
 type View = 'home' | 'source' | 'wall-editor' | 'wall-picker' | 'climb-editor' | 'library'
+type EditableClimbStatus = 'draft' | 'submitted'
+type ClimbStatus = EditableClimbStatus | 'changes_requested' | 'approved'
+type ReviewDecision = 'approve' | 'request_changes'
 type AuthUser = { name?: string | null; email?: string | null; image?: string | null }
 type WallHold = Omit<DetectedHold, 'role'>
 type WallRecord = {
@@ -56,11 +59,28 @@ type ClimbRecord = {
   name: string
   grade: string
   assignments: Array<{ holdId: string; role: HoldRole }>
+  ownerName: string
+  wallName: string
+  isOwner: boolean
+  status: ClimbStatus
+  review: {
+    decision: ReviewDecision
+    grade: string
+    comment: string
+    reviewerName: string
+    reviewedAt: string
+  } | null
   createdAt: string
   updatedAt: string
 }
 
 const grades = ['VB', 'V0', 'V1', 'V2', 'V3', 'V4', 'V5', 'V6', 'V7', 'V8', 'V9', 'V10+']
+const climbStatusLabels: Record<ClimbStatus, string> = {
+  draft: 'Draft',
+  submitted: 'Awaiting review',
+  changes_requested: 'Changes requested',
+  approved: 'Approved',
+}
 const roleOptions: Array<{ id: HoldRole; label: string; hint: string }> = [
   { id: 'start', label: 'Start', hint: 'First move' },
   { id: 'hand', label: 'Hands', hint: 'Hand holds' },
@@ -344,23 +364,492 @@ function WallPicker({ walls, onChoose, onAdd, onCancel }: { walls: WallRecord[];
   return <section className="simple-form-shell wide"><header className="form-heading"><button className="text-button" type="button" onClick={onCancel}>← Cancel</button><p className="eyebrow">New climb</p><h1>Choose a wall</h1><p>The climb will use this wall’s mapped holds.</p></header>{walls.length ? <div className="wall-picker-list">{walls.map((wall) => <button className="wall-pick-row" type="button" key={wall.id} onClick={() => onChoose(wall)}><img src={wall.imageDataUrl} alt="" /><span><strong>{wall.name}</strong><small>{wall.holds.length} mapped holds</small></span><Icon name="arrow" /></button>)}</div> : <div className="empty-book"><Icon name="image" size={34} /><h2>No walls yet</h2><p>Scan your first wall before setting a climb.</p><button className="chalk-action" type="button" onClick={onAdd}>Add a wall <Icon name="arrow" /></button></div>}</section>
 }
 
-function ClimbForm({ wall, climb, pending, error, onCancel, onSave }: { wall: WallRecord; climb?: ClimbRecord; pending: boolean; error?: string; onCancel: () => void; onSave: (details: { name: string; grade: string; assignments: Array<{ holdId: string; role: HoldRole }> }) => void }) {
-  const assignments = new Map(climb?.assignments.map((assignment) => [assignment.holdId, assignment.role]))
-  const [holds, setHolds] = useState<DetectedHold[]>(wall.holds.map((hold) => ({ ...hold, role: assignments.get(hold.id) ?? null })))
+function ClimbForm({
+  wall,
+  climb,
+  pending,
+  error,
+  onCancel,
+  onSave,
+}: {
+  wall: WallRecord
+  climb?: ClimbRecord
+  pending: boolean
+  error?: string
+  onCancel: () => void
+  onSave: (details: {
+    name: string
+    grade: string
+    assignments: Array<{ holdId: string; role: HoldRole }>
+    status: EditableClimbStatus
+  }) => void
+}) {
+  const assignments = new Map(
+    climb?.assignments.map((assignment) => [assignment.holdId, assignment.role]),
+  )
+  const [holds, setHolds] = useState<DetectedHold[]>(
+    wall.holds.map((hold) => ({
+      ...hold,
+      role: assignments.get(hold.id) ?? null,
+    })),
+  )
   const [history, setHistory] = useState<DetectedHold[][]>([])
   const [activeRole, setActiveRole] = useState<HoldRole>('hand')
   const [name, setName] = useState(climb?.name ?? '')
   const [grade, setGrade] = useState(climb?.grade ?? 'V3')
-  const selected = holds.filter((hold): hold is DetectedHold & { role: HoldRole } => Boolean(hold.role))
-  const counts = useMemo(() => Object.fromEntries(roleOptions.map((option) => [option.id, holds.filter((hold) => hold.role === option.id).length])) as Record<HoldRole, number>, [holds])
-  const canSave = Boolean(name.trim()) && selected.length >= 2 && counts.start > 0 && counts.finish > 0
-  const commit = (next: DetectedHold[]) => { setHistory((current) => [...current.slice(-19), holds]); setHolds(next) }
-  const submit = (event: FormEvent) => { event.preventDefault(); onSave({ name, grade, assignments: selected.map((hold) => ({ holdId: hold.id, role: hold.role })) }) }
-  return <section className="flow-shell"><header className="flow-heading compact"><div><button className="text-button" type="button" onClick={onCancel}>← Cancel</button><p className="eyebrow">{climb ? 'Edit climb' : 'New climb'} · {wall.name}</p><h1>{climb ? 'Update your climb' : 'Set a climb'}</h1></div><span className="mapped-pill"><span />{selected.length} marked</span></header><form onSubmit={submit}><div className="climb-details-strip"><label>Climb name<input value={name} onChange={(event) => setName(event.target.value)} placeholder="e.g. Paper Tiger" maxLength={80} required /></label><label>Grade<select value={grade} onChange={(event) => setGrade(event.target.value)}>{grades.map((item) => <option key={item}>{item}</option>)}</select></label></div><div className="climb-canvas-card"><div className="chalkline-rail" role="radiogroup" aria-label="Hold role">{roleOptions.map((option) => <button className={`role-${option.id}${activeRole === option.id ? ' active' : ''}`} type="button" role="radio" aria-checked={activeRole === option.id} key={option.id} onClick={() => setActiveRole(option.id)}><span className="role-swatch" /><span><b>{option.label}</b><small>{counts[option.id]}</small></span></button>)}<button className="rail-undo" type="button" disabled={!history.length} onClick={() => { const previous = history.at(-1); if (previous) { setHolds(previous); setHistory((current) => current.slice(0, -1)) } }}><Icon name="undo" /><span>Undo</span></button></div><WallViewport frame={{ dataUrl: wall.imageDataUrl, width: wall.imageWidth, height: wall.imageHeight, sourceType: wall.sourceType }} holds={holds} instruction={`Choose a role, then tap holds on ${wall.name}.`} onHoldTap={(id) => commit(holds.map((hold) => hold.id === id ? { ...hold, role: hold.role === activeRole ? null : activeRole } : hold))} /></div><div className="chalkline-submit"><div><strong>{selected.length} holds marked</strong><span>{counts.start} start · {counts.hand} hands · {counts.foot} feet · {counts.finish} finish</span></div>{error && <p className="error" role="alert">{error}</p>}<button className="chalk-action" type="submit" disabled={pending || !canSave}>{pending ? 'Saving climb…' : climb ? 'Save changes' : 'Save climb'}<Icon name="arrow" /></button></div>{!canSave && <p className="form-hint">Add a name, one start hold, one finish hold, and at least two holds total.</p>}</form></section>
+  const [publishError, setPublishError] = useState('')
+  const selected = holds.filter(
+    (hold): hold is DetectedHold & { role: HoldRole } => Boolean(hold.role),
+  )
+  const counts = useMemo(
+    () =>
+      Object.fromEntries(
+        roleOptions.map((option) => [
+          option.id,
+          holds.filter((hold) => hold.role === option.id).length,
+        ]),
+      ) as Record<HoldRole, number>,
+    [holds],
+  )
+  const canPublish =
+    Boolean(name.trim()) &&
+    Boolean(grade.trim()) &&
+    selected.length >= 2 &&
+    counts.start > 0 &&
+    counts.finish > 0
+
+  function details(status: EditableClimbStatus) {
+    return {
+      name,
+      grade,
+      assignments: selected.map((hold) => ({
+        holdId: hold.id,
+        role: hold.role,
+      })),
+      status,
+    }
+  }
+
+  function commit(next: DetectedHold[]) {
+    setHistory((current) => [...current.slice(-19), holds])
+    setHolds(next)
+    setPublishError('')
+  }
+
+  function publish(event: FormEvent) {
+    event.preventDefault()
+    if (!canPublish) {
+      setPublishError(
+        'Complete the name, grade, start, finish, and at least two holds before publishing.',
+      )
+      return
+    }
+    onSave(details('submitted'))
+  }
+
+  return (
+    <section className="flow-shell">
+      <header className="flow-heading compact">
+        <div>
+          <button className="text-button" type="button" onClick={onCancel}>
+            ← Cancel
+          </button>
+          <p className="eyebrow">
+            {climb ? 'Edit climb' : 'New climb'} · {wall.name}
+          </p>
+          <h1>{climb ? 'Update your climb' : 'Set a climb'}</h1>
+        </div>
+        <span className="mapped-pill">
+          <span />
+          {selected.length} marked
+        </span>
+      </header>
+      <form onSubmit={publish}>
+        <div className="climb-details-strip">
+          <label>
+            Climb name
+            <input
+              value={name}
+              onChange={(event) => {
+                setName(event.target.value)
+                setPublishError('')
+              }}
+              placeholder="e.g. Paper Tiger"
+              maxLength={80}
+            />
+          </label>
+          <label>
+            Grade
+            <select
+              value={grade}
+              onChange={(event) => {
+                setGrade(event.target.value)
+                setPublishError('')
+              }}
+            >
+              {grades.map((item) => (
+                <option key={item}>{item}</option>
+              ))}
+            </select>
+          </label>
+        </div>
+        <div className="climb-canvas-card">
+          <div className="chalkline-rail" role="radiogroup" aria-label="Hold role">
+            {roleOptions.map((option) => (
+              <button
+                className={`role-${option.id}${activeRole === option.id ? ' active' : ''}`}
+                type="button"
+                role="radio"
+                aria-checked={activeRole === option.id}
+                key={option.id}
+                onClick={() => setActiveRole(option.id)}
+              >
+                <span className="role-swatch" />
+                <span>
+                  <b>{option.label}</b>
+                  <small>{counts[option.id]}</small>
+                </span>
+              </button>
+            ))}
+            <button
+              className="rail-undo"
+              type="button"
+              disabled={!history.length}
+              onClick={() => {
+                const previous = history.at(-1)
+                if (previous) {
+                  setHolds(previous)
+                  setHistory((current) => current.slice(0, -1))
+                  setPublishError('')
+                }
+              }}
+            >
+              <Icon name="undo" />
+              <span>Undo</span>
+            </button>
+          </div>
+          <WallViewport
+            frame={{
+              dataUrl: wall.imageDataUrl,
+              width: wall.imageWidth,
+              height: wall.imageHeight,
+              sourceType: wall.sourceType,
+            }}
+            holds={holds}
+            instruction={`Choose a role, then tap holds on ${wall.name}.`}
+            onHoldTap={(id) =>
+              commit(
+                holds.map((hold) =>
+                  hold.id === id
+                    ? {
+                        ...hold,
+                        role: hold.role === activeRole ? null : activeRole,
+                      }
+                    : hold,
+                ),
+              )
+            }
+          />
+        </div>
+        <div className="chalkline-submit">
+          <div>
+            <strong>{selected.length} holds marked</strong>
+            <span>
+              {counts.start} start · {counts.hand} hands · {counts.foot} feet ·{' '}
+              {counts.finish} finish
+            </span>
+          </div>
+          <div className="climb-save-actions">
+            <button
+              className="secondary-action"
+              type="button"
+              disabled={pending}
+              onClick={() => onSave(details('draft'))}
+            >
+              {pending ? 'Saving…' : 'Save draft'}
+            </button>
+            <button className="chalk-action" type="submit" disabled={pending}>
+              {pending
+                ? 'Publishing…'
+                : climb
+                  ? 'Update & publish'
+                  : 'Publish for review'}
+              <Icon name="arrow" />
+            </button>
+          </div>
+        </div>
+        {(publishError || error) && (
+          <p className="form-hint form-error" role="alert">
+            {publishError || error}
+          </p>
+        )}
+        {!canPublish && !publishError && !error && (
+          <p className="form-hint">
+            Drafts can be incomplete. Publishing requires a name, grade, one start,
+            one finish, and at least two holds.
+          </p>
+        )}
+      </form>
+    </section>
+  )
 }
 
-function TopoBook({ walls, climbs, notice, onAddWall, onSetClimb, onEditWall, onDeleteWall, onEditClimb, onDeleteClimb }: { walls: WallRecord[]; climbs: ClimbRecord[]; notice: string; onAddWall: () => void; onSetClimb: (wall: WallRecord) => void; onEditWall: (wall: WallRecord) => void; onDeleteWall: (wall: WallRecord) => void; onEditClimb: (climb: ClimbRecord) => void; onDeleteClimb: (climb: ClimbRecord) => void }) {
-  return <section className="topo-book"><header className="book-heading"><div><p className="eyebrow">Topo book</p><h1>Your walls</h1><p>Each wall keeps its map and all the climbs set on it.</p></div><button className="chalk-action" type="button" onClick={onAddWall}><Icon name="plus" /> Add wall</button></header>{notice && <div className="save-receipt" role="status"><Icon name="check" />{notice}</div>}{walls.length === 0 ? <div className="empty-book"><Icon name="book" size={38} /><h2>No walls in your book yet</h2><p>Add a wall once, then reuse it for every climb.</p><button className="chalk-action" type="button" onClick={onAddWall}>Add your first wall <Icon name="arrow" /></button></div> : <div className="topo-list">{walls.map((wall) => { const wallClimbs = climbs.filter((climb) => climb.wallId === wall.id); return <article className="topo-wall" key={wall.id}><div className="wall-spine"><img src={wall.imageDataUrl} alt={`${wall.name} wall`} /><span>{wall.name}</span></div><div className="wall-book-content"><header><div><h2>{wall.name}</h2><p>{wall.holds.length} holds · {wallClimbs.length} climb{wallClimbs.length === 1 ? '' : 's'}</p></div><div className="crud-actions"><button type="button" onClick={() => onEditWall(wall)}><Icon name="edit" /> Edit wall</button><button className="danger" type="button" aria-label={`Delete ${wall.name}`} onClick={() => onDeleteWall(wall)}><Icon name="trash" /></button></div></header><div className="climb-rows">{wallClimbs.map((climb) => <div className="climb-row" key={climb.id}><span><strong>{climb.name}</strong><small>{climb.assignments.length} marked holds</small></span><b>{climb.grade}</b><button type="button" onClick={() => onEditClimb(climb)}><Icon name="edit" /> Edit</button><button className="icon-danger" type="button" aria-label={`Delete ${climb.name}`} onClick={() => onDeleteClimb(climb)}><Icon name="trash" /></button></div>)}{wallClimbs.length === 0 && <p className="no-climbs">No climbs here yet.</p>}</div><button className="set-on-wall" type="button" onClick={() => onSetClimb(wall)}><Icon name="plus" /> Set a climb on this wall</button></div></article> })}</div>}</section>
+function ReviewCard({
+  climb,
+  pending,
+  error,
+  onReview,
+}: {
+  climb: ClimbRecord
+  pending: boolean
+  error?: string
+  onReview: (decision: ReviewDecision, grade: string, comment: string) => void
+}) {
+  const [grade, setGrade] = useState(climb.grade)
+  const [comment, setComment] = useState('')
+
+  return (
+    <article className="review-card">
+      <header>
+        <div>
+          <span className="climb-status status-submitted">Awaiting review</span>
+          <h3>{climb.name}</h3>
+          <p>
+            {climb.ownerName} · {climb.wallName} · {climb.assignments.length} holds
+          </p>
+        </div>
+        <strong>{climb.grade}</strong>
+      </header>
+      <div className="review-fields">
+        <label>
+          Reviewed grade
+          <select value={grade} onChange={(event) => setGrade(event.target.value)}>
+            {grades.map((item) => (
+              <option key={item}>{item}</option>
+            ))}
+          </select>
+        </label>
+        <label>
+          Feedback
+          <textarea
+            value={comment}
+            onChange={(event) => setComment(event.target.value)}
+            placeholder="Optional notes for the setter"
+            maxLength={500}
+          />
+        </label>
+      </div>
+      {error && (
+        <p className="error" role="alert">
+          {error}
+        </p>
+      )}
+      <div className="review-actions">
+        <button
+          className="secondary-action request-action"
+          type="button"
+          disabled={pending}
+          onClick={() => onReview('request_changes', grade, comment)}
+        >
+          Request changes
+        </button>
+        <button
+          className="chalk-action"
+          type="button"
+          disabled={pending}
+          onClick={() => onReview('approve', grade, comment)}
+        >
+          {pending ? 'Saving review…' : 'Approve grade'}
+        </button>
+      </div>
+    </article>
+  )
+}
+
+function TopoBook({
+  walls,
+  climbs,
+  notice,
+  canReview,
+  reviewTargetId,
+  reviewPending,
+  reviewError,
+  onAddWall,
+  onSetClimb,
+  onEditWall,
+  onDeleteWall,
+  onEditClimb,
+  onDeleteClimb,
+  onReview,
+}: {
+  walls: WallRecord[]
+  climbs: ClimbRecord[]
+  notice: string
+  canReview: boolean
+  reviewTargetId?: string
+  reviewPending: boolean
+  reviewError?: string
+  onAddWall: () => void
+  onSetClimb: (wall: WallRecord) => void
+  onEditWall: (wall: WallRecord) => void
+  onDeleteWall: (wall: WallRecord) => void
+  onEditClimb: (climb: ClimbRecord) => void
+  onDeleteClimb: (climb: ClimbRecord) => void
+  onReview: (
+    climb: ClimbRecord,
+    decision: ReviewDecision,
+    grade: string,
+    comment: string,
+  ) => void
+}) {
+  const reviewQueue = climbs.filter(
+    (climb) => !climb.isOwner && climb.status === 'submitted',
+  )
+
+  return (
+    <section className="topo-book">
+      <header className="book-heading">
+        <div>
+          <p className="eyebrow">Topo book</p>
+          <h1>Your walls</h1>
+          <p>Each wall keeps its map and all the climbs set on it.</p>
+        </div>
+        <button className="chalk-action" type="button" onClick={onAddWall}>
+          <Icon name="plus" /> Add wall
+        </button>
+      </header>
+      {notice && (
+        <div className="save-receipt" role="status">
+          <Icon name="check" />
+          {notice}
+        </div>
+      )}
+      {canReview && reviewQueue.length > 0 && (
+        <section className="review-queue" aria-labelledby="review-queue-title">
+          <header>
+            <div>
+              <p className="eyebrow">Coach review</p>
+              <h2 id="review-queue-title">Published climbs</h2>
+            </div>
+            <span>{reviewQueue.length} waiting</span>
+          </header>
+          <div className="review-grid">
+            {reviewQueue.map((climb) => (
+              <ReviewCard
+                key={climb.id}
+                climb={climb}
+                pending={reviewPending && reviewTargetId === climb.id}
+                error={reviewTargetId === climb.id ? reviewError : undefined}
+                onReview={(decision, grade, comment) =>
+                  onReview(climb, decision, grade, comment)
+                }
+              />
+            ))}
+          </div>
+        </section>
+      )}
+      {walls.length === 0 ? (
+        <div className="empty-book">
+          <Icon name="book" size={38} />
+          <h2>No walls in your book yet</h2>
+          <p>Add a wall once, then reuse it for every climb.</p>
+          <button className="chalk-action" type="button" onClick={onAddWall}>
+            Add your first wall <Icon name="arrow" />
+          </button>
+        </div>
+      ) : (
+        <div className="topo-list">
+          {walls.map((wall) => {
+            const wallClimbs = climbs.filter(
+              (climb) => climb.isOwner && climb.wallId === wall.id,
+            )
+            return (
+              <article className="topo-wall" key={wall.id}>
+                <div className="wall-spine">
+                  <img src={wall.imageDataUrl} alt={`${wall.name} wall`} />
+                  <span>{wall.name}</span>
+                </div>
+                <div className="wall-book-content">
+                  <header>
+                    <div>
+                      <h2>{wall.name}</h2>
+                      <p>
+                        {wall.holds.length} holds · {wallClimbs.length} climb
+                        {wallClimbs.length === 1 ? '' : 's'}
+                      </p>
+                    </div>
+                    <div className="crud-actions">
+                      <button type="button" onClick={() => onEditWall(wall)}>
+                        <Icon name="edit" /> Edit wall
+                      </button>
+                      <button
+                        className="danger"
+                        type="button"
+                        aria-label={`Delete ${wall.name}`}
+                        onClick={() => onDeleteWall(wall)}
+                      >
+                        <Icon name="trash" />
+                      </button>
+                    </div>
+                  </header>
+                  <div className="climb-rows">
+                    {wallClimbs.map((climb) => (
+                      <div className="climb-row" key={climb.id}>
+                        <span>
+                          <strong>{climb.name || 'Untitled draft'}</strong>
+                          <small>
+                            {climb.assignments.length} marked holds ·{' '}
+                            <span className={`climb-status status-${climb.status}`}>
+                              {climbStatusLabels[climb.status]}
+                            </span>
+                          </small>
+                          {climb.review?.comment && (
+                            <small className="review-comment">
+                              {climb.review.reviewerName}: {climb.review.comment}
+                            </small>
+                          )}
+                        </span>
+                        <b>
+                          {climb.status === 'approved' && climb.review
+                            ? climb.review.grade
+                            : climb.grade || '—'}
+                        </b>
+                        {climb.status !== 'approved' ? (
+                          <button type="button" onClick={() => onEditClimb(climb)}>
+                            <Icon name="edit" /> Edit
+                          </button>
+                        ) : (
+                          <span className="reviewed-label">Reviewed</span>
+                        )}
+                        <button
+                          className="icon-danger"
+                          type="button"
+                          aria-label={`Delete ${climb.name || 'draft climb'}`}
+                          onClick={() => onDeleteClimb(climb)}
+                        >
+                          <Icon name="trash" />
+                        </button>
+                      </div>
+                    ))}
+                    {wallClimbs.length === 0 && (
+                      <p className="no-climbs">No climbs here yet.</p>
+                    )}
+                  </div>
+                  <button
+                    className="set-on-wall"
+                    type="button"
+                    onClick={() => onSetClimb(wall)}
+                  >
+                    <Icon name="plus" /> Set a climb on this wall
+                  </button>
+                </div>
+              </article>
+            )
+          })}
+        </div>
+      )}
+    </section>
+  )
 }
 
 export default function App() {
@@ -372,10 +861,10 @@ export default function App() {
   if (auth.isPending) return <AuthMessage title="Checking your session…" />
   if (auth.isError) return <AuthMessage title="Unable to reach the login service" detail={auth.error.message} />
   if (!auth.data.user) return <LoginScreen configured={auth.data.configured} apiOnline={Boolean(health.data)} pending={authPending} error={authError} onSignIn={() => void handleAuth(signInWithGoogle)} />
-  return <ClimbingApp user={auth.data.user} authPending={authPending} onSignOut={() => void handleAuth(signOut)} />
+  return <ClimbingApp user={auth.data.user} canReview={auth.data.canReview} authPending={authPending} onSignOut={() => void handleAuth(signOut)} />
 }
 
-function ClimbingApp({ user, authPending, onSignOut }: { user: AuthUser; authPending: boolean; onSignOut: () => void }) {
+function ClimbingApp({ user, canReview, authPending, onSignOut }: { user: AuthUser; canReview: boolean; authPending: boolean; onSignOut: () => void }) {
   const cameraInput = useRef<HTMLInputElement>(null)
   const videoInput = useRef<HTMLInputElement>(null)
   const uploadInput = useRef<HTMLInputElement>(null)
@@ -399,11 +888,12 @@ function ClimbingApp({ user, authPending, onSignOut }: { user: AuthUser; authPen
   const createWall = useMutation(trpc.walls.create.mutationOptions({ onSuccess: async (wall) => { await refresh(); setNotice(`${wall.name} saved. It is ready for climbs.`); setView('library') } }))
   const updateWall = useMutation(trpc.walls.update.mutationOptions({ onSuccess: async (wall) => { await refresh(); setNotice(`${wall.name} updated.`); setView('library') } }))
   const deleteWall = useMutation(trpc.walls.delete.mutationOptions({ onSuccess: refresh }))
-  const createClimb = useMutation(trpc.climbs.create.mutationOptions({ onSuccess: async (climb) => { await refresh(); setNotice(`${climb.name} saved to the topo book.`); setView('library') } }))
-  const updateClimb = useMutation(trpc.climbs.update.mutationOptions({ onSuccess: async (climb) => { await refresh(); setNotice(`${climb.name} updated.`); setView('library') } }))
+  const createClimb = useMutation(trpc.climbs.create.mutationOptions({ onSuccess: async (climb) => { await refresh(); setNotice(climb.status === 'draft' ? 'Draft saved to the topo book.' : `${climb.name} published for review.`); setView('library') } }))
+  const updateClimb = useMutation(trpc.climbs.update.mutationOptions({ onSuccess: async (climb) => { await refresh(); setNotice(climb.status === 'draft' ? 'Draft updated.' : `${climb.name} updated and published for review.`); setView('library') } }))
   const deleteClimb = useMutation(trpc.climbs.delete.mutationOptions({ onSuccess: refresh }))
+  const reviewClimb = useMutation(trpc.climbs.review.mutationOptions({ onSuccess: async (climb) => { await refresh(); setNotice(climb.status === 'approved' ? `${climb.name} approved.` : `Changes requested for ${climb.name}.`) } }))
 
-  function resetDraft() { setFrame(null); setDetectedHolds([]); setEditingWall(null); setSelectedWall(null); setEditingClimb(null); setError(''); createWall.reset(); updateWall.reset(); createClimb.reset(); updateClimb.reset() }
+  function resetDraft() { setFrame(null); setDetectedHolds([]); setEditingWall(null); setSelectedWall(null); setEditingClimb(null); setError(''); createWall.reset(); updateWall.reset(); createClimb.reset(); updateClimb.reset(); reviewClimb.reset() }
   function go(next: View) { resetDraft(); setNotice(''); setView(next); window.scrollTo({ top: 0, behavior: 'smooth' }) }
 
   async function processFrame(nextFrame: WallFrame) {
@@ -458,7 +948,7 @@ function ClimbingApp({ user, authPending, onSignOut }: { user: AuthUser; authPen
     {view === 'wall-editor' && frame && <WallForm key={editingWall?.id ?? frame.dataUrl.slice(-24)} frame={frame} initialHolds={detectedHolds} initialName={editingWall?.name ?? ''} detectionMode={detectionMode} editing={Boolean(editingWall)} pending={createWall.isPending || updateWall.isPending} error={createWall.error?.message ?? updateWall.error?.message} onCancel={() => go(editingWall ? 'library' : 'source')} onSave={saveWall} />}
     {view === 'wall-picker' && <WallPicker walls={walls} onChoose={(wall) => startClimb(wall)} onAdd={() => setView('source')} onCancel={() => go('home')} />}
     {view === 'climb-editor' && selectedWall && <ClimbForm key={editingClimb?.id ?? selectedWall.id} wall={selectedWall} climb={editingClimb ?? undefined} pending={createClimb.isPending || updateClimb.isPending} error={createClimb.error?.message ?? updateClimb.error?.message} onCancel={() => go('library')} onSave={(details) => { if (editingClimb) updateClimb.mutate({ id: editingClimb.id, ...details }); else createClimb.mutate({ wallId: selectedWall.id, ...details }) }} />}
-    {view === 'library' && <TopoBook walls={walls} climbs={climbs} notice={notice} onAddWall={() => go('source')} onSetClimb={(wall) => startClimb(wall)} onEditWall={editWall} onDeleteWall={(wall) => { const count = climbs.filter((climb) => climb.wallId === wall.id).length; if (window.confirm(`Delete ${wall.name}? This will also delete ${count} climb${count === 1 ? '' : 's'} on it.`)) deleteWall.mutate({ id: wall.id }) }} onEditClimb={(climb) => { const wall = walls.find((item) => item.id === climb.wallId); if (wall) startClimb(wall, climb) }} onDeleteClimb={(climb) => { if (window.confirm(`Delete ${climb.name}?`)) deleteClimb.mutate({ id: climb.id }) }} />}
+    {view === 'library' && <TopoBook walls={walls} climbs={climbs} notice={notice} canReview={canReview} reviewTargetId={reviewClimb.variables?.id} reviewPending={reviewClimb.isPending} reviewError={reviewClimb.error?.message} onAddWall={() => go('source')} onSetClimb={(wall) => startClimb(wall)} onEditWall={editWall} onDeleteWall={(wall) => { const count = climbs.filter((climb) => climb.isOwner && climb.wallId === wall.id).length; if (window.confirm(`Delete ${wall.name}? This will also delete ${count} climb${count === 1 ? '' : 's'} on it.`)) deleteWall.mutate({ id: wall.id }) }} onEditClimb={(climb) => { const wall = walls.find((item) => item.id === climb.wallId); if (wall) startClimb(wall, climb) }} onDeleteClimb={(climb) => { if (window.confirm(`Delete ${climb.name || 'this draft'}?`)) deleteClimb.mutate({ id: climb.id }) }} onReview={(climb, decision, grade, comment) => reviewClimb.mutate({ id: climb.id, decision, grade, comment })} />}
     {(isAnalyzing || error) && <div className="overlay" role={error ? 'alertdialog' : 'dialog'} aria-modal="true"><div className="analysis-card">{error ? <><button className="close-button" type="button" onClick={() => setError('')} aria-label="Close"><Icon name="close" /></button><span className="analysis-icon error-icon"><Icon name="image" size={30} /></span><h2>We couldn’t scan that</h2><p>{error}</p><button className="primary-action" type="button" onClick={() => setError('')}>Try another file</button></> : <><span className="analysis-icon"><Icon name="scan" size={30} /></span><h2>Mapping your wall</h2><p>Finding individual holds and tracing their edges…</p><span className="progress-track"><span /></span></>}</div></div>}
     <footer><Brand /><p>Save the wall. Set the climb.</p></footer></main>
 }
