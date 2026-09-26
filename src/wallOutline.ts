@@ -8,6 +8,11 @@ export type HoldCorrection = {
   matchedCount: number
 }
 
+export type HoldErasure = {
+  holds: DetectedHold[]
+  removedIds: string[]
+}
+
 function clamp(value: number) {
   return Math.min(100, Math.max(0, value))
 }
@@ -83,6 +88,87 @@ export function pointInPolygon(point: Point, polygon: Point[]) {
     if (crosses) inside = !inside
   }
   return inside
+}
+
+function sampleErasePath(path: Point[], brushRadius: number, aspectRatio: number) {
+  if (path.length <= 1) return path
+  const samples = [path[0]]
+  const sampleGap = Math.max(0.05, brushRadius * 0.45)
+
+  for (let index = 1; index < path.length; index += 1) {
+    const start = path[index - 1]
+    const end = path[index]
+    const distance = Math.hypot(
+      end.x - start.x,
+      (end.y - start.y) / Math.max(0.01, aspectRatio),
+    )
+    const steps = Math.max(1, Math.ceil(distance / sampleGap))
+    for (let step = 1; step <= steps; step += 1) {
+      const progress = step / steps
+      samples.push({
+        x: start.x + (end.x - start.x) * progress,
+        y: start.y + (end.y - start.y) * progress,
+      })
+    }
+  }
+
+  return samples
+}
+
+function eraserTouchesHold(
+  point: Point,
+  hold: DetectedHold,
+  brushRadius: number,
+  aspectRatio: number,
+) {
+  if (pointInPolygon(point, hold.points)) return true
+  return hold.points.some((vertex, index) =>
+    scaledDistance(
+      point,
+      vertex,
+      hold.points[(index + 1) % hold.points.length],
+      aspectRatio,
+    ) <= brushRadius,
+  )
+}
+
+export function eraseHoldsAlongPath(
+  holds: DetectedHold[],
+  path: Point[],
+  aspectRatio: number,
+  brushRadius: number,
+): HoldErasure {
+  if (path.length === 0 || holds.length === 0) {
+    return { holds, removedIds: [] }
+  }
+
+  const removedIds = new Set<string>()
+  let isTouchingOutlineCluster = false
+
+  for (const point of sampleErasePath(path, brushRadius, aspectRatio)) {
+    const matches = holds
+      .filter((hold) => eraserTouchesHold(point, hold, brushRadius, aspectRatio))
+      .sort((a, b) => {
+        const areaDifference = polygonArea(a.points) - polygonArea(b.points)
+        if (areaDifference !== 0) return areaDifference
+        return scaledDistance(point, a.center, a.center, aspectRatio) -
+          scaledDistance(point, b.center, b.center, aspectRatio)
+      })
+
+    if (matches.length === 0) {
+      isTouchingOutlineCluster = false
+      continue
+    }
+    if (isTouchingOutlineCluster) continue
+
+    removedIds.add(matches[0].id)
+    isTouchingOutlineCluster = true
+  }
+
+  return {
+    holds: holds.filter((hold) => !removedIds.has(hold.id)),
+    removedIds: [...removedIds],
+  }
 }
 
 export function simplifyHoldOutline(
