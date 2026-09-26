@@ -1,7 +1,7 @@
 import { initTRPC, TRPCError } from '@trpc/server'
 import { z } from 'zod'
 
-import { detectHoldsWithAI, getAiDetectionStatus } from './aiHoldDetection'
+import { detectHoldsWithAI, getAiDetectionStatus } from './aiHoldDetection.ts'
 import type { Context } from './context'
 
 const t = initTRPC.context<Context>().create()
