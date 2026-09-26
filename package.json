@@ -9,7 +9,7 @@
     "dev:api": "tsx watch server/index.ts",
     "build": "tsc --noEmit && vite build",
     "check": "tsc --noEmit",
-    "test": "node --import tsx --test src/*.test.ts",
+    "test": "node --import tsx --test src/*.test.ts server/*.test.ts",
     "start:api": "doppler run -- tsx server/index.ts"
   },
   "dependencies": {
