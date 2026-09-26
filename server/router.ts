@@ -98,7 +98,7 @@ const updateClimbInput = z.object({
 const reviewClimbInput = z.object({
   id: z.string().uuid(),
   decision: z.enum(['approve', 'request_changes']),
-  grade: z.string().trim().min(1, 'Reviewed grade is required').max(12),
+  rating: z.number().int().min(1).max(5),
   comment: z.string().trim().max(500),
 })
 
@@ -120,7 +120,7 @@ type Climb = {
   status: z.infer<typeof climbStatus>
   review: {
     decision: z.infer<typeof reviewClimbInput>['decision']
-    grade: string
+    rating: number
     comment: string
     reviewerEmail: string
     reviewerName: string
@@ -153,7 +153,7 @@ function publicClimb(climb: Climb, viewerEmail: string) {
     review: climb.review
       ? {
           decision: climb.review.decision,
-          grade: climb.review.grade,
+          rating: climb.review.rating,
           comment: climb.review.comment,
           reviewerName: climb.review.reviewerName,
           reviewedAt: climb.review.reviewedAt,
@@ -423,7 +423,7 @@ export const appRouter = t.router({
           input.decision === 'approve' ? 'approved' : 'changes_requested'
         climb.review = {
           decision: input.decision,
-          grade: input.grade,
+          rating: input.rating,
           comment: input.comment,
           reviewerEmail: ctx.ownerEmail,
           reviewerName: ctx.ownerName,
