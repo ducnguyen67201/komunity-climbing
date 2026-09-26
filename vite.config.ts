@@ -5,7 +5,14 @@ export default defineConfig({
   plugins: [react()],
   server: {
     proxy: {
-      '/trpc': 'http://localhost:3001',
+      '/auth': {
+        target: 'http://localhost:3001',
+        changeOrigin: false,
+      },
+      '/trpc': {
+        target: 'http://localhost:3001',
+        changeOrigin: false,
+      },
     },
   },
 })
