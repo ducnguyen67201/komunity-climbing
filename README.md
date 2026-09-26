@@ -75,8 +75,8 @@ npm run start:api # run the API without watch mode
   for review requires every climb field to be completed.
 - Drafts and review feedback stay private to their owner. Configured reviewers
   see only complete climbs that have been published for review.
-- Reviewers can approve the submitted grade or return a reviewed grade with
-  feedback. A reviewer cannot review their own climb.
+- Reviewers can give a one-to-five-star rating, approve a climb, or request
+  changes with feedback. A reviewer cannot review their own climb.
 - Approved climbs are locked to preserve the review record.
 
 ## Where to work

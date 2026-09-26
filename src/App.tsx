@@ -65,7 +65,7 @@ type ClimbRecord = {
   status: ClimbStatus
   review: {
     decision: ReviewDecision
-    grade: string
+    rating: number
     comment: string
     reviewerName: string
     reviewedAt: string
@@ -603,9 +603,9 @@ function ReviewCard({
   climb: ClimbRecord
   pending: boolean
   error?: string
-  onReview: (decision: ReviewDecision, grade: string, comment: string) => void
+  onReview: (decision: ReviewDecision, rating: number, comment: string) => void
 }) {
-  const [grade, setGrade] = useState(climb.grade)
+  const [rating, setRating] = useState(5)
   const [comment, setComment] = useState('')
 
   return (
@@ -621,14 +621,24 @@ function ReviewCard({
         <strong>{climb.grade}</strong>
       </header>
       <div className="review-fields">
-        <label>
-          Reviewed grade
-          <select value={grade} onChange={(event) => setGrade(event.target.value)}>
-            {grades.map((item) => (
-              <option key={item}>{item}</option>
+        <fieldset className="rating-field">
+          <legend>Rating</legend>
+          <div className="star-rating" aria-label={`${rating} out of 5 stars`}>
+            {[1, 2, 3, 4, 5].map((star) => (
+              <button
+                className={star <= rating ? 'selected' : ''}
+                type="button"
+                key={star}
+                aria-label={`${star} out of 5 stars`}
+                aria-pressed={star === rating}
+                onClick={() => setRating(star)}
+              >
+                ★
+              </button>
             ))}
-          </select>
-        </label>
+          </div>
+          <span>{rating}/5 stars</span>
+        </fieldset>
         <label>
           Feedback
           <textarea
@@ -649,7 +659,7 @@ function ReviewCard({
           className="secondary-action request-action"
           type="button"
           disabled={pending}
-          onClick={() => onReview('request_changes', grade, comment)}
+          onClick={() => onReview('request_changes', rating, comment)}
         >
           Request changes
         </button>
@@ -657,9 +667,9 @@ function ReviewCard({
           className="chalk-action"
           type="button"
           disabled={pending}
-          onClick={() => onReview('approve', grade, comment)}
+          onClick={() => onReview('approve', rating, comment)}
         >
-          {pending ? 'Saving review…' : 'Approve grade'}
+          {pending ? 'Saving review…' : `Approve · ${rating} stars`}
         </button>
       </div>
     </article>
@@ -698,7 +708,7 @@ function TopoBook({
   onReview: (
     climb: ClimbRecord,
     decision: ReviewDecision,
-    grade: string,
+    rating: number,
     comment: string,
   ) => void
 }) {
@@ -740,8 +750,8 @@ function TopoBook({
                 climb={climb}
                 pending={reviewPending && reviewTargetId === climb.id}
                 error={reviewTargetId === climb.id ? reviewError : undefined}
-                onReview={(decision, grade, comment) =>
-                  onReview(climb, decision, grade, comment)
+                onReview={(decision, rating, comment) =>
+                  onReview(climb, decision, rating, comment)
                 }
               />
             ))}
@@ -803,17 +813,25 @@ function TopoBook({
                               {climbStatusLabels[climb.status]}
                             </span>
                           </small>
+                          {climb.review && (
+                            <small
+                              className="review-rating"
+                              aria-label={`${climb.review.rating} out of 5 stars`}
+                            >
+                              <span aria-hidden="true">
+                                {'★'.repeat(climb.review.rating)}
+                                {'☆'.repeat(5 - climb.review.rating)}
+                              </span>{' '}
+                              {climb.review.rating}/5
+                            </small>
+                          )}
                           {climb.review?.comment && (
                             <small className="review-comment">
                               {climb.review.reviewerName}: {climb.review.comment}
                             </small>
                           )}
                         </span>
-                        <b>
-                          {climb.status === 'approved' && climb.review
-                            ? climb.review.grade
-                            : climb.grade || '—'}
-                        </b>
+                        <b>{climb.grade || '—'}</b>
                         {climb.status !== 'approved' ? (
                           <button type="button" onClick={() => onEditClimb(climb)}>
                             <Icon name="edit" /> Edit
@@ -948,7 +966,7 @@ function ClimbingApp({ user, canReview, authPending, onSignOut }: { user: AuthUs
     {view === 'wall-editor' && frame && <WallForm key={editingWall?.id ?? frame.dataUrl.slice(-24)} frame={frame} initialHolds={detectedHolds} initialName={editingWall?.name ?? ''} detectionMode={detectionMode} editing={Boolean(editingWall)} pending={createWall.isPending || updateWall.isPending} error={createWall.error?.message ?? updateWall.error?.message} onCancel={() => go(editingWall ? 'library' : 'source')} onSave={saveWall} />}
     {view === 'wall-picker' && <WallPicker walls={walls} onChoose={(wall) => startClimb(wall)} onAdd={() => setView('source')} onCancel={() => go('home')} />}
     {view === 'climb-editor' && selectedWall && <ClimbForm key={editingClimb?.id ?? selectedWall.id} wall={selectedWall} climb={editingClimb ?? undefined} pending={createClimb.isPending || updateClimb.isPending} error={createClimb.error?.message ?? updateClimb.error?.message} onCancel={() => go('library')} onSave={(details) => { if (editingClimb) updateClimb.mutate({ id: editingClimb.id, ...details }); else createClimb.mutate({ wallId: selectedWall.id, ...details }) }} />}
-    {view === 'library' && <TopoBook walls={walls} climbs={climbs} notice={notice} canReview={canReview} reviewTargetId={reviewClimb.variables?.id} reviewPending={reviewClimb.isPending} reviewError={reviewClimb.error?.message} onAddWall={() => go('source')} onSetClimb={(wall) => startClimb(wall)} onEditWall={editWall} onDeleteWall={(wall) => { const count = climbs.filter((climb) => climb.isOwner && climb.wallId === wall.id).length; if (window.confirm(`Delete ${wall.name}? This will also delete ${count} climb${count === 1 ? '' : 's'} on it.`)) deleteWall.mutate({ id: wall.id }) }} onEditClimb={(climb) => { const wall = walls.find((item) => item.id === climb.wallId); if (wall) startClimb(wall, climb) }} onDeleteClimb={(climb) => { if (window.confirm(`Delete ${climb.name || 'this draft'}?`)) deleteClimb.mutate({ id: climb.id }) }} onReview={(climb, decision, grade, comment) => reviewClimb.mutate({ id: climb.id, decision, grade, comment })} />}
+    {view === 'library' && <TopoBook walls={walls} climbs={climbs} notice={notice} canReview={canReview} reviewTargetId={reviewClimb.variables?.id} reviewPending={reviewClimb.isPending} reviewError={reviewClimb.error?.message} onAddWall={() => go('source')} onSetClimb={(wall) => startClimb(wall)} onEditWall={editWall} onDeleteWall={(wall) => { const count = climbs.filter((climb) => climb.isOwner && climb.wallId === wall.id).length; if (window.confirm(`Delete ${wall.name}? This will also delete ${count} climb${count === 1 ? '' : 's'} on it.`)) deleteWall.mutate({ id: wall.id }) }} onEditClimb={(climb) => { const wall = walls.find((item) => item.id === climb.wallId); if (wall) startClimb(wall, climb) }} onDeleteClimb={(climb) => { if (window.confirm(`Delete ${climb.name || 'this draft'}?`)) deleteClimb.mutate({ id: climb.id }) }} onReview={(climb, decision, rating, comment) => reviewClimb.mutate({ id: climb.id, decision, rating, comment })} />}
     {(isAnalyzing || error) && <div className="overlay" role={error ? 'alertdialog' : 'dialog'} aria-modal="true"><div className="analysis-card">{error ? <><button className="close-button" type="button" onClick={() => setError('')} aria-label="Close"><Icon name="close" /></button><span className="analysis-icon error-icon"><Icon name="image" size={30} /></span><h2>We couldn’t scan that</h2><p>{error}</p><button className="primary-action" type="button" onClick={() => setError('')}>Try another file</button></> : <><span className="analysis-icon"><Icon name="scan" size={30} /></span><h2>Mapping your wall</h2><p>Finding individual holds and tracing their edges…</p><span className="progress-track"><span /></span></>}</div></div>}
     <footer><Brand /><p>Save the wall. Set the climb.</p></footer></main>
 }

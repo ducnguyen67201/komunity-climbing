@@ -157,14 +157,23 @@ test('allows partial drafts but requires every field before publishing', async (
   assert.equal(published.status, 'submitted')
   assert.equal((await reviewer.climbs.list()).length, 1)
 
+  await assert.rejects(
+    reviewer.climbs.review({
+      id: draft.id,
+      decision: 'approve',
+      rating: 6,
+      comment: '',
+    }),
+  )
+
   const approved = await reviewer.climbs.review({
     id: draft.id,
     decision: 'approve',
-    grade: 'V5',
-    comment: 'Grade confirmed.',
+    rating: 5,
+    comment: 'Excellent route.',
   })
 
   assert.equal(approved.status, 'approved')
-  assert.equal(approved.review?.grade, 'V5')
+  assert.equal(approved.review?.rating, 5)
   assert.equal((await owner.climbs.list())[0]?.status, 'approved')
 })

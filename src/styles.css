@@ -2256,6 +2256,30 @@ footer p {
   gap: 10px;
 }
 .review-fields label { display: grid; gap: 7px; color: #aeb5aa; font-size: 0.7rem; font-weight: 700; }
+.rating-field {
+  min-width: 0;
+  margin: 0;
+  padding: 0;
+  border: 0;
+  color: #aeb5aa;
+}
+.rating-field legend { margin-bottom: 7px; font-size: 0.7rem; font-weight: 700; }
+.rating-field > span { display: block; margin-top: 4px; color: #858d82; font-size: 0.66rem; }
+.star-rating { display: flex; gap: 2px; }
+.star-rating button {
+  min-width: 0;
+  min-height: 38px;
+  padding: 0 2px;
+  border: 0;
+  color: #586055;
+  background: transparent;
+  font-size: 1.42rem;
+  line-height: 1;
+  cursor: pointer;
+}
+.star-rating button.selected { color: #f0ca54; }
+.star-rating button:hover,
+.star-rating button:focus-visible { color: #ffe079; background: transparent; }
 .review-fields select,
 .review-fields textarea {
   width: 100%;
@@ -2280,6 +2304,7 @@ footer p {
 .status-changes_requested { color: #ee947d; }
 .status-approved { color: var(--lime); }
 .review-comment { color: #b9c2b4 !important; }
+.review-rating { color: #f0ca54 !important; }
 .reviewed-label { color: var(--lime); font-size: 0.66rem; font-weight: 800; }
 .topo-wall {
   min-height: 210px;
