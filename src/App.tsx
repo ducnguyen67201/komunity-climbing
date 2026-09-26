@@ -33,7 +33,7 @@ import {
   wheelWallZoom,
   type ViewportPoint,
 } from './wallViewport'
-import { applyHoldOutline } from './wallOutline'
+import { applyHoldOutline, eraseHoldsAlongPath } from './wallOutline'
 
 type DetectionMode = 'ai' | 'local'
 type View = 'home' | 'source' | 'wall-editor' | 'wall-picker' | 'climb-editor' | 'library'
@@ -67,6 +67,7 @@ const roleOptions: Array<{ id: HoldRole; label: string; hint: string }> = [
   { id: 'foot', label: 'Feet', hint: 'Foot holds' },
   { id: 'finish', label: 'Finish', hint: 'Top hold' },
 ]
+const ERASER_RADIUS_PX = 14
 
 function Icon({ name, size = 20 }: { name: string; size?: number }) {
   const paths: Record<string, ReactNode> = {
@@ -87,6 +88,7 @@ function Icon({ name, size = 20 }: { name: string; size?: number }) {
     zoomOut: <><circle cx="11" cy="11" r="7" /><path d="m16.5 16.5 4 4M8 11h6" /></>,
     reset: <><path d="M4 8V4h4M20 16v4h-4" /><path d="M5.5 5.5A8 8 0 0 1 19 9M18.5 18.5A8 8 0 0 1 5 15" /></>,
     edit: <><path d="m4 20 4.5-1 10-10a2.1 2.1 0 0 0-3-3l-10 10L4 20Z" /><path d="m13.5 7.5 3 3" /></>,
+    eraser: <><path d="m7.5 20.5-4-4a2.5 2.5 0 0 1 0-3.5l9.5-9.5a2.5 2.5 0 0 1 3.5 0l4 4a2.5 2.5 0 0 1 0 3.5l-9.5 9.5H7.5Z" /><path d="m9 7.5 7.5 7.5M7.5 20.5H21" /></>,
     trash: <><path d="M4 7h16M9 7V4h6v3M7 7l1 13h8l1-13" /><path d="M10 11v5M14 11v5" /></>,
     book: <><path d="M4 5a3 3 0 0 1 3-2h5v17H7a3 3 0 0 0-3 2V5Z" /><path d="M20 5a3 3 0 0 0-3-2h-5v17h5a3 3 0 0 1 3 2V5Z" /></>,
   }
@@ -107,7 +109,7 @@ function LoginScreen({ configured, apiOnline, pending, error, onSignIn }: { conf
   )
 }
 
-function WallViewport({ frame, holds, drawMode = false, onHoldTap, onDrawHold, instruction }: { frame: WallFrame; holds: DetectedHold[]; drawMode?: boolean; onHoldTap: (id: string) => void; onDrawHold?: (points: Point[]) => void; instruction: string }) {
+function WallViewport({ frame, holds, correctionMode = null, onHoldTap, onDrawHold, onEraseStroke, instruction }: { frame: WallFrame; holds: DetectedHold[]; correctionMode?: 'draw' | 'erase' | null; onHoldTap: (id: string) => void; onDrawHold?: (points: Point[]) => void; onEraseStroke?: (points: Point[], brushRadius: number) => void; instruction: string }) {
   const canvasRef = useRef<HTMLDivElement>(null)
   const activePointers = useRef(new Map<number, ViewportPoint>())
   const viewRef = useRef({ zoom: MIN_WALL_ZOOM, pan: { x: 0, y: 0 } })
@@ -117,6 +119,8 @@ function WallViewport({ frame, holds, drawMode = false, onHoldTap, onDrawHold, i
   const [pan, setPan] = useState<ViewportPoint>({ x: 0, y: 0 })
   const [isPanning, setIsPanning] = useState(false)
   const [draftPoints, setDraftPoints] = useState<Point[]>([])
+  const drawMode = correctionMode === 'draw'
+  const eraseMode = correctionMode === 'erase'
 
   function wallPoint(clientX: number, clientY: number) {
     const canvas = canvasRef.current
@@ -161,7 +165,7 @@ function WallViewport({ frame, holds, drawMode = false, onHoldTap, onDrawHold, i
   function endPointer(event: PointerEvent<HTMLDivElement>, cancelled = false) {
     if (!activePointers.current.has(event.pointerId)) return
     const gesture = gestureRef.current
-    const finishingDraw = drawMode && activePointers.current.size === 1 && draftRef.current.length > 0
+    const finishingCorrection = Boolean(correctionMode) && activePointers.current.size === 1 && draftRef.current.length > 0
     const isTap = !cancelled && activePointers.current.size === 1 && !gesture.moved
     const holdId = gesture.holdId
     activePointers.current.delete(event.pointerId)
@@ -170,13 +174,16 @@ function WallViewport({ frame, holds, drawMode = false, onHoldTap, onDrawHold, i
     if (remaining) {
       Object.assign(gesture, { startX: remaining.x, startY: remaining.y, lastX: remaining.x, lastY: remaining.y, moved: true })
     } else setIsPanning(false)
-    if (finishingDraw) {
+    if (finishingCorrection) {
       const completed = draftRef.current
+      const canvasWidth = Math.max(1, canvasRef.current?.clientWidth ?? 1)
+      const brushRadius = (ERASER_RADIUS_PX / (canvasWidth * viewRef.current.zoom)) * 100
       setDraft([])
-      if (!cancelled && onDrawHold) onDrawHold(completed)
+      if (!cancelled && drawMode && onDrawHold) onDrawHold(completed)
+      if (!cancelled && eraseMode && onEraseStroke) onEraseStroke(completed, brushRadius)
       return
     }
-    if (isTap && holdId && !drawMode) onHoldTap(holdId)
+    if (isTap && holdId && !correctionMode) onHoldTap(holdId)
   }
 
   function pointerDown(event: PointerEvent<HTMLDivElement>) {
@@ -185,7 +192,7 @@ function WallViewport({ frame, holds, drawMode = false, onHoldTap, onDrawHold, i
     activePointers.current.set(event.pointerId, { x: event.clientX, y: event.clientY })
     const gesture = gestureRef.current
     if (activePointers.current.size === 1) {
-      if (drawMode) {
+      if (correctionMode) {
         const point = wallPoint(event.clientX, event.clientY)
         if (point) setDraft([point])
         Object.assign(gesture, { startX: event.clientX, startY: event.clientY, lastX: event.clientX, lastY: event.clientY, moved: true, holdId: null })
@@ -225,7 +232,7 @@ function WallViewport({ frame, holds, drawMode = false, onHoldTap, onDrawHold, i
       setIsPanning(true)
       return
     }
-    if (drawMode && draftRef.current.length > 0) {
+    if (correctionMode && draftRef.current.length > 0) {
       const samples = event.nativeEvent.getCoalescedEvents?.() ?? [event.nativeEvent]
       const next = [...draftRef.current]
       for (const sample of samples) {
@@ -244,6 +251,9 @@ function WallViewport({ frame, holds, drawMode = false, onHoldTap, onDrawHold, i
     gesture.lastY = event.clientY
     setIsPanning(true)
   }
+
+  const previewRadius = (ERASER_RADIUS_PX / (Math.max(1, canvasRef.current?.clientWidth ?? 1) * zoom)) * 100
+  const draftPath = draftPoints.map(({ x, y }) => `${x},${y}`).join(' ')
 
   function wheel(event: WheelEvent<HTMLDivElement>) {
     const nextZoom = wheelWallZoom(viewRef.current.zoom, event.deltaY)
@@ -266,10 +276,11 @@ function WallViewport({ frame, holds, drawMode = false, onHoldTap, onDrawHold, i
   }
 
   return (
-    <div className="wall-canvas-wrap"><div ref={canvasRef} className={`wall-canvas${drawMode ? ' drawing' : ''}${zoom > 1 ? ' zoomed' : ''}${isPanning ? ' panning' : ''}`} style={{ aspectRatio: `${frame.width} / ${frame.height}` }} role="region" aria-label={`Climbing wall. ${instruction}`} aria-keyshortcuts="= - 0 Escape ArrowUp ArrowDown ArrowLeft ArrowRight" tabIndex={0} onPointerDown={pointerDown} onPointerMove={pointerMove} onPointerUp={endPointer} onPointerCancel={(event) => endPointer(event, true)} onLostPointerCapture={(event) => endPointer(event, true)} onWheel={wheel} onKeyDown={keyDown}>
-      <div className="wall-stage" style={{ transform: `translate3d(${pan.x}px, ${pan.y}px, 0) scale(${zoom})` }}><img src={frame.dataUrl} alt="Scanned climbing wall" /><svg viewBox="0 0 100 100" preserveAspectRatio="none" aria-label="Mapped climbing holds">{holds.map((hold, index) => { const points = hold.points.map(({ x, y }) => `${x},${y}`).join(' '); return <g key={hold.id} className={hold.role ? `selected-hold role-${hold.role}` : 'candidate-hold'} data-hold-id={hold.id} role="button" tabIndex={0} aria-label={`${hold.role ? `${hold.role} hold` : 'Mapped hold'} ${index + 1}`} aria-pressed={Boolean(hold.role)} onKeyDown={(event) => { if (!drawMode && (event.key === 'Enter' || event.key === ' ')) { event.preventDefault(); onHoldTap(hold.id) } }}><polygon className="hold-hit-area" points={points} />{hold.role && <polygon className="hold-halo" points={points} />}<polygon className="hold-shape" points={points} />{hold.role && <circle className="hold-marker" cx={hold.center.x} cy={hold.center.y} r="1.25" />}</g> })}{draftPoints.length > 1 && <polygon className="draft-hold-shape" points={draftPoints.map(({ x, y }) => `${x},${y}`).join(' ')} />}</svg></div>
+    <div className="wall-canvas-wrap"><div ref={canvasRef} className={`wall-canvas${drawMode ? ' drawing' : ''}${eraseMode ? ' erasing' : ''}${zoom > 1 ? ' zoomed' : ''}${isPanning ? ' panning' : ''}`} style={{ aspectRatio: `${frame.width} / ${frame.height}` }} role="region" aria-label={`Climbing wall. ${instruction}`} aria-keyshortcuts="= - 0 Escape ArrowUp ArrowDown ArrowLeft ArrowRight" tabIndex={0} onPointerDown={pointerDown} onPointerMove={pointerMove} onPointerUp={endPointer} onPointerCancel={(event) => endPointer(event, true)} onLostPointerCapture={(event) => endPointer(event, true)} onWheel={wheel} onKeyDown={keyDown}>
+      <div className="wall-stage" style={{ transform: `translate3d(${pan.x}px, ${pan.y}px, 0) scale(${zoom})` }}><img src={frame.dataUrl} alt="Scanned climbing wall" /><svg viewBox="0 0 100 100" preserveAspectRatio="none" aria-label="Mapped climbing holds">{holds.map((hold, index) => { const points = hold.points.map(({ x, y }) => `${x},${y}`).join(' '); return <g key={hold.id} className={hold.role ? `selected-hold role-${hold.role}` : 'candidate-hold'} data-hold-id={hold.id} role="button" tabIndex={correctionMode ? -1 : 0} aria-label={`${hold.role ? `${hold.role} hold` : 'Mapped hold'} ${index + 1}`} aria-pressed={Boolean(hold.role)} onKeyDown={(event) => { if (!correctionMode && (event.key === 'Enter' || event.key === ' ')) { event.preventDefault(); onHoldTap(hold.id) } }}><polygon className="hold-hit-area" points={points} />{hold.role && <polygon className="hold-halo" points={points} />}<polygon className="hold-shape" points={points} />{hold.role && <circle className="hold-marker" cx={hold.center.x} cy={hold.center.y} r="1.25" />}</g> })}{drawMode && draftPoints.length > 1 && <polygon className="draft-hold-shape" points={draftPath} />}{eraseMode && draftPoints.length > 0 && <g className="eraser-preview"><polyline points={draftPath} style={{ strokeWidth: ERASER_RADIUS_PX * 2 }} /><ellipse cx={draftPoints.at(-1)!.x} cy={draftPoints.at(-1)!.y} rx={previewRadius} ry={previewRadius * (frame.width / frame.height)} /></g>}</svg></div>
       <div className="zoom-controls" role="group" aria-label="Wall zoom controls" onPointerDown={(event) => event.stopPropagation()}><button type="button" aria-label="Zoom out" disabled={zoom <= 1} onClick={() => zoomAt(viewRef.current.zoom - WALL_ZOOM_STEP)}><Icon name="zoomOut" size={17} /></button><output aria-live="polite">{Math.round(zoom * 100)}%</output><button type="button" aria-label="Zoom in" disabled={zoom >= MAX_WALL_ZOOM} onClick={() => zoomAt(viewRef.current.zoom + WALL_ZOOM_STEP)}><Icon name="zoomIn" size={17} /></button><button type="button" aria-label="Reset zoom" disabled={zoom <= 1 && pan.x === 0 && pan.y === 0} onClick={() => applyViewport(1, { x: 0, y: 0 })}><Icon name="reset" size={16} /></button></div>
       {drawMode && <div className="add-instruction"><Icon name="edit" size={16} /> Draw around the whole hold · lift to close</div>}
+      {eraseMode && <div className="add-instruction erase"><Icon name="eraser" size={16} /> Rub over wrong outlines · lift to erase</div>}
     </div></div>
   )
 }
@@ -287,7 +298,7 @@ function WallForm({ frame, initialHolds, initialName, detectionMode, editing, pe
     initialHolds.map((hold) => ({ ...hold, role: null })),
   )
   const [history, setHistory] = useState<DetectedHold[][]>([])
-  const [correctionTool, setCorrectionTool] = useState<'draw' | 'remove' | null>(null)
+  const [correctionTool, setCorrectionTool] = useState<'draw' | 'erase' | null>(null)
   const [correctionStatus, setCorrectionStatus] = useState('')
   const [name, setName] = useState(initialName)
   const commit = (next: DetectedHold[]) => { setHistory((current) => [...current.slice(-19), holds]); setHolds(next) }
@@ -307,10 +318,26 @@ function WallForm({ frame, initialHolds, initialName, detectionMode, editing, pe
           : 'Hold outline fixed.',
     )
   }
+  const eraseStroke = (points: Point[], brushRadius: number) => {
+    const erasure = eraseHoldsAlongPath(
+      holds,
+      points,
+      frame.width / frame.height,
+      brushRadius,
+    )
+    if (erasure.removedIds.length === 0) {
+      setCorrectionStatus('No outline under the eraser.')
+      return
+    }
+    commit(erasure.holds)
+    setCorrectionStatus(
+      `${erasure.removedIds.length} outline${erasure.removedIds.length === 1 ? '' : 's'} erased.`,
+    )
+  }
   const submit = (event: FormEvent) => { event.preventDefault(); onSave(name, holds) }
   const drawMode = correctionTool === 'draw'
-  const removeMode = correctionTool === 'remove'
-  return <section className="flow-shell"><header className="flow-heading"><div><button className="text-button" type="button" onClick={onCancel}>← Cancel</button><p className="eyebrow">{editing ? 'Edit wall' : 'New wall'}</p><h1>{editing ? 'Update this wall' : 'Make this wall reusable'}</h1></div><span className="mapped-pill"><span />{holds.length} holds · {detectionMode === 'ai' ? 'AI assisted' : 'local scan'}</span></header><div className="wall-form-grid"><div className="wall-step"><div className="step-copy"><span>1</span><div><h2>Check the holds</h2><p>Some outlines will be incomplete. Draw around the whole hold to add it or fix the scan.</p></div></div><div className="correction-tools"><button className={drawMode ? 'active' : ''} type="button" aria-pressed={drawMode} onClick={() => { setCorrectionTool((current) => current === 'draw' ? null : 'draw'); setCorrectionStatus('') }}><Icon name="edit" /> Draw outline</button><button className={removeMode ? 'active' : ''} type="button" aria-pressed={removeMode} onClick={() => { setCorrectionTool((current) => current === 'remove' ? null : 'remove'); setCorrectionStatus('') }}><Icon name="trash" /> Remove outline</button><button type="button" disabled={!history.length} onClick={() => { undo(); setCorrectionStatus('Last correction undone.') }}><Icon name="undo" /> Undo</button><span className="correction-status" aria-live="polite">{correctionStatus}</span></div><WallViewport frame={frame} holds={holds} drawMode={drawMode} instruction={drawMode ? 'Draw around the whole hold. Lift to close the outline. Use two fingers to zoom or move.' : removeMode ? 'Tap the incorrect outline to remove it.' : 'Choose Draw outline or Remove outline to correct the scan.'} onHoldTap={(id) => { if (removeMode) { commit(holds.filter((hold) => hold.id !== id)); setCorrectionStatus('Outline removed.') } }} onDrawHold={drawOutline} /></div><form className="name-card" onSubmit={submit}><span className="tape-label">2 · Name this wall</span><label>Wall name<input value={name} onChange={(event) => setName(event.target.value)} placeholder="e.g. North cave" maxLength={80} required autoFocus /></label><p>This is the name setters will choose when they create a climb.</p>{error && <p className="error" role="alert">{error}</p>}<button className="chalk-action" type="submit" disabled={pending || holds.length === 0}>{pending ? 'Saving wall…' : editing ? 'Save changes' : 'Save wall'}<Icon name="arrow" /></button></form></div></section>
+  const eraseMode = correctionTool === 'erase'
+  return <section className="flow-shell"><header className="flow-heading"><div><button className="text-button" type="button" onClick={onCancel}>← Cancel</button><p className="eyebrow">{editing ? 'Edit wall' : 'New wall'}</p><h1>{editing ? 'Update this wall' : 'Make this wall reusable'}</h1></div><span className="mapped-pill"><span />{holds.length} holds · {detectionMode === 'ai' ? 'AI assisted' : 'local scan'}</span></header><div className="wall-form-grid"><div className="wall-step"><div className="step-copy"><span>1</span><div><h2>Check the holds</h2><p>Draw around missed holds, or rub the eraser over noisy outlines. Volumes stay part of the wall.</p></div></div><div className="correction-tools"><button className={drawMode ? 'active' : ''} type="button" aria-pressed={drawMode} onClick={() => { setCorrectionTool((current) => current === 'draw' ? null : 'draw'); setCorrectionStatus('') }}><Icon name="edit" /> Draw outline</button><button className={eraseMode ? 'active' : ''} type="button" aria-pressed={eraseMode} onClick={() => { setCorrectionTool((current) => current === 'erase' ? null : 'erase'); setCorrectionStatus('') }}><Icon name="eraser" /> Eraser</button><button type="button" disabled={!history.length} onClick={() => { undo(); setCorrectionStatus('Last correction undone.') }}><Icon name="undo" /> Undo</button><span className="correction-status" aria-live="polite">{correctionStatus}</span></div><WallViewport frame={frame} holds={holds} correctionMode={correctionTool} instruction={drawMode ? 'Draw around the whole hold. Lift to close the outline. Use two fingers to zoom or move.' : eraseMode ? 'Rub over incorrect outlines. Lift to erase them.' : 'Choose Draw outline or Eraser to correct the scan.'} onHoldTap={() => {}} onDrawHold={drawOutline} onEraseStroke={eraseStroke} /></div><form className="name-card" onSubmit={submit}><span className="tape-label">2 · Name this wall</span><label>Wall name<input value={name} onChange={(event) => setName(event.target.value)} placeholder="e.g. North cave" maxLength={80} required autoFocus /></label><p>This is the name setters will choose when they create a climb.</p>{error && <p className="error" role="alert">{error}</p>}<button className="chalk-action" type="submit" disabled={pending || holds.length === 0}>{pending ? 'Saving wall…' : editing ? 'Save changes' : 'Save wall'}<Icon name="arrow" /></button></form></div></section>
 }
 
 function WallPicker({ walls, onChoose, onAdd, onCancel }: { walls: WallRecord[]; onChoose: (wall: WallRecord) => void; onAdd: () => void; onCancel: () => void }) {

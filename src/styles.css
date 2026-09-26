@@ -933,7 +933,9 @@ h3 {
 }
 
 .wall-canvas.drawing,
-.wall-canvas.zoomed.drawing {
+.wall-canvas.zoomed.drawing,
+.wall-canvas.erasing,
+.wall-canvas.zoomed.erasing {
   cursor: crosshair;
   touch-action: none;
 }
@@ -985,6 +987,25 @@ h3 {
   stroke-dasharray: 4 2;
   vector-effect: non-scaling-stroke;
   pointer-events: none;
+}
+
+.eraser-preview {
+  pointer-events: none;
+}
+
+.eraser-preview polyline {
+  fill: none;
+  stroke: rgba(255, 152, 122, 0.3);
+  stroke-linecap: round;
+  stroke-linejoin: round;
+  vector-effect: non-scaling-stroke;
+}
+
+.eraser-preview ellipse {
+  fill: rgba(255, 152, 122, 0.18);
+  stroke: #ff987a;
+  stroke-width: 1.5px;
+  vector-effect: non-scaling-stroke;
 }
 
 .hold-hit-area {
@@ -1094,6 +1115,11 @@ h3 {
   font-weight: 700;
   pointer-events: none;
   transform: translateX(-50%);
+}
+
+.add-instruction.erase {
+  color: #ffad96;
+  border-color: rgba(255, 152, 122, 0.42);
 }
 
 .canvas-caption {
