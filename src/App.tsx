@@ -94,7 +94,7 @@ function Icon({ name, size = 20 }: { name: string; size?: number }) {
 }
 
 function Brand() {
-  return <div className="brand" aria-label="Crux climbing"><span className="brand-mark"><span /><span /><span /></span><span>CRUX</span></div>
+  return <div className="brand" aria-label="Crux climbing"><img className="brand-mark" src="/crux-mark.svg" alt="" /><span>CRUX</span></div>
 }
 
 function AuthMessage({ title, detail }: { title: string; detail?: string }) {

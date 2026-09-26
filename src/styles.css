@@ -84,42 +84,10 @@ select:focus-visible,
 }
 
 .brand-mark {
-  position: relative;
-  width: 26px;
-  height: 25px;
+  width: 32px;
+  height: 32px;
   display: block;
-  transform: rotate(-7deg);
-}
-
-.brand-mark span {
-  position: absolute;
-  display: block;
-  background: var(--lime);
-  border-radius: 2px;
-}
-
-.brand-mark span:nth-child(1) {
-  left: 1px;
-  bottom: 1px;
-  width: 7px;
-  height: 14px;
-  transform: skew(-12deg);
-}
-
-.brand-mark span:nth-child(2) {
-  left: 10px;
-  bottom: 1px;
-  width: 7px;
-  height: 23px;
-  transform: skew(-12deg);
-}
-
-.brand-mark span:nth-child(3) {
-  left: 19px;
-  bottom: 1px;
-  width: 7px;
-  height: 17px;
-  transform: skew(-12deg);
+  filter: drop-shadow(0 4px 9px rgba(200, 244, 93, 0.12));
 }
 
 .site-header nav {
