@@ -37,6 +37,21 @@ in the frontend.
 Open <http://localhost:5173>. Vite proxies `/trpc` requests to the API on port
 `3001`, so local development does not need CORS configuration.
 
+## AI hold detection
+
+The app uses OpenAI vision when a server-side API key is configured, and falls
+back to the local colour/contrast detector when it is not.
+
+1. Create an API key at <https://platform.openai.com/api-keys>.
+2. Copy `.env.example` to `.env`.
+3. Add the key to `OPENAI_API_KEY` in `.env`.
+4. Restart `npm run dev`.
+
+The API key is read only by the Node server. Never expose it through a `VITE_`
+environment variable or commit the `.env` file. The default model is the
+cost-efficient `gpt-6-luna`; `OPENAI_VISION_MODEL` can be changed if the OpenAI
+project uses a different vision-capable model.
+
 ## Useful commands
 
 ```bash

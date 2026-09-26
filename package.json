@@ -9,6 +9,7 @@
     "dev:api": "tsx watch server/index.ts",
     "build": "tsc --noEmit && vite build",
     "check": "tsc --noEmit",
+    "test": "node --import tsx --test src/*.test.ts",
     "start:api": "doppler run -- tsx server/index.ts"
   },
   "dependencies": {
@@ -19,6 +20,7 @@
     "@trpc/tanstack-react-query": "^11.19.0",
     "dotenv": "^18.0.4",
     "express": "^5.2.1",
+    "openai": "^7.23.0",
     "react": "^19.3.0",
     "react-dom": "^19.3.0",
     "zod": "^4.6.5"

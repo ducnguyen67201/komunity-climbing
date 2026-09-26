@@ -60,6 +60,7 @@ app.use(
   createExpressMiddleware({
     router: appRouter,
     createContext,
+    maxBodySize: 10 * 1024 * 1024,
   }),
 )
 
