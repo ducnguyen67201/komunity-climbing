@@ -177,3 +177,38 @@ test('allows partial drafts but requires every field before publishing', async (
   assert.equal(approved.review?.rating, 5)
   assert.equal((await owner.climbs.list())[0]?.status, 'approved')
 })
+
+test('logs attempts and completion on saved climbs without changing the route', async () => {
+  const owner = appRouter.createCaller({ ...context, session: { ...context.session!, user: { email: 'log-owner@example.com' } } })
+  const stranger = appRouter.createCaller({ ...context, session: { ...context.session!, user: { email: 'log-stranger@example.com' } } })
+  const reviewer = appRouter.createCaller({ ...context, canReview: true, session: { ...context.session!, user: { email: 'log-coach@example.com' } } })
+  const anonymous = appRouter.createCaller({ ...context, session: null })
+  const wall = await owner.walls.create({ name: 'Log wall', imageDataUrl: 'data:image/png;base64,aA==', imageWidth: 800, imageHeight: 1000, sourceType: 'photo', holds })
+  const climb = await owner.climbs.create({ wallId: wall.id, name: 'Five tries', grade: 'V3', status: 'submitted', assignments: [{ holdId: 'hold-1', role: 'start' }, { holdId: 'hold-2', role: 'finish' }] })
+  assert.deepEqual(climb.logs, [])
+  const input = { id: climb.id, entryId: crypto.randomUUID(), attempts: 5, completed: false }
+  for (const attempts of [0, -1, 1.5, 1000]) {
+    await assert.rejects(owner.climbs.logAttempts({ ...input, attempts }))
+  }
+  await assert.rejects(stranger.climbs.logAttempts(input), /Climb not found/)
+  await assert.rejects(reviewer.climbs.logAttempts(input), /Climb not found/)
+  await assert.rejects(anonymous.climbs.logAttempts(input))
+  await assert.rejects(owner.climbs.logAttempts({ ...input, id: crypto.randomUUID() }), /Climb not found/)
+  const first = await owner.climbs.logAttempts(input)
+  assert.equal(first.attempts, 5)
+  assert.equal(first.completed, false)
+  assert.deepEqual(await owner.climbs.logAttempts(input), first, 'retries do not duplicate logs')
+  await assert.rejects(owner.climbs.logAttempts({ ...input, attempts: 6 }), /already been saved/)
+  assert.deepEqual((await reviewer.climbs.list()).find((item) => item.id === climb.id)?.logs, [], 'logs remain private')
+  await reviewer.climbs.review({ id: climb.id, decision: 'approve', rating: 5, comment: 'Good route' })
+  await owner.climbs.logAttempts({ id: climb.id, entryId: crypto.randomUUID(), attempts: 2, completed: true })
+  const saved = (await owner.climbs.list()).find((item) => item.id === climb.id)!
+  assert.equal(saved.logs.length, 2)
+  assert.equal(saved.logs.reduce((total, entry) => total + entry.attempts, 0), 7)
+  assert.equal(saved.logs[0].completed, true)
+  assert.equal(saved.status, 'approved')
+  assert.equal(saved.review?.rating, 5)
+  assert.deepEqual(saved.assignments, climb.assignments)
+  await owner.walls.delete({ id: wall.id })
+  await assert.rejects(owner.climbs.logAttempts(input), /Climb not found/)
+})

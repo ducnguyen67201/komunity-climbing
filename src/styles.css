@@ -894,6 +894,7 @@ h3 {
 }
 
 .wall-canvas-wrap {
+  position: relative;
   min-height: 560px;
   padding: 22px;
   display: grid;
@@ -960,7 +961,7 @@ h3 {
   pointer-events: none;
 }
 
-.wall-canvas svg {
+.wall-stage > svg {
   position: absolute;
   inset: 0;
   width: 100%;
@@ -1052,8 +1053,9 @@ h3 {
 .zoom-controls {
   position: absolute;
   z-index: 5;
-  top: 12px;
-  right: 12px;
+  top: 8px;
+  right: 8px;
+  max-width: calc(100% - 16px);
   min-height: 40px;
   padding: 4px;
   border: 1px solid rgba(255, 255, 255, 0.16);
@@ -1068,9 +1070,10 @@ h3 {
 }
 
 .zoom-controls button {
-  width: 36px;
-  height: 36px;
-  min-height: 36px;
+  flex: 0 0 40px;
+  width: 40px;
+  height: 40px;
+  min-height: 40px;
   padding: 0;
   border: 0;
   border-radius: 7px;
@@ -2372,7 +2375,9 @@ footer p {
   .wall-step .wall-canvas-wrap,
   .climb-canvas-card .wall-canvas-wrap { min-height: 340px; padding: 8px; }
   .climb-details-strip { grid-template-columns: 1fr 115px; }
-  .chalkline-rail { grid-template-columns: repeat(4, minmax(92px, 1fr)); }
+  .chalkline-rail { grid-template-columns: repeat(4, minmax(0, 1fr)); }
+  .chalkline-rail button { padding: 8px 4px; gap: 5px; }
+  .chalkline-rail button > span:last-child { gap: 4px; }
   .chalkline-submit { align-items: stretch; flex-direction: column; }
   .chalkline-submit .chalk-action { width: 100%; }
   .climb-save-actions { align-items: stretch; flex-direction: column-reverse; }
@@ -2388,4 +2393,102 @@ footer p {
   .wall-book-content > header { align-items: flex-start; flex-direction: column; }
   .climb-row { grid-template-columns: 1fr 40px auto auto; }
   .climb-row button { width: 38px; padding: 0; justify-content: center; font-size: 0; }
+}
+
+/* Expand the complete editing surface, including its hold tools, on phones too. */
+.editor-view-tools {
+  display: flex;
+  justify-content: flex-end;
+  padding: 8px 12px;
+  border-bottom: 1px solid var(--line);
+}
+.editor-view-tools button {
+  min-height: 44px;
+  padding: 0 12px;
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  border: 1px solid #353b33;
+  border-radius: 7px;
+  background: #171a17;
+  font-size: 0.75rem;
+  cursor: pointer;
+}
+.editor-workspace.is-fullscreen {
+  position: fixed;
+  z-index: 100;
+  inset: 0;
+  width: 100%;
+  height: 100dvh;
+  padding: env(safe-area-inset-top) env(safe-area-inset-right) env(safe-area-inset-bottom) env(safe-area-inset-left);
+  display: flex;
+  flex-direction: column;
+  border: 0;
+  border-radius: 0;
+  overscroll-behavior: contain;
+}
+.is-fullscreen > :not(.wall-canvas-wrap) { flex-shrink: 0; }
+.is-fullscreen .step-copy { display: none; }
+.editor-workspace.is-fullscreen .wall-canvas-wrap {
+  flex: 1;
+  min-height: 0;
+  min-width: 0;
+  padding: 8px;
+  overflow: hidden;
+}
+.is-fullscreen .wall-canvas { max-height: none; }
+.zoom-controls svg { flex-shrink: 0; }
+
+@media (max-width: 640px) {
+  .correction-tools { flex-wrap: wrap; }
+  .correction-status { flex-basis: 100%; margin-left: 0; }
+  .add-instruction { max-width: calc(100% - 16px); white-space: normal; text-align: center; }
+}
+
+@media (max-height: 500px) and (min-width: 641px) {
+  .is-fullscreen .chalkline-rail { grid-template-columns: repeat(4, minmax(0, 1fr)) auto; }
+  .is-fullscreen .chalkline-rail .rail-undo { grid-column: auto; border-top: 0; border-left: 1px solid #30352e; }
+}
+
+.climb-row > span { min-width: 0; }
+.climb-row .climb-open {
+  width: auto;
+  min-width: 0;
+  min-height: 44px;
+  padding: 0;
+  justify-content: flex-start;
+  border: 0;
+  color: var(--lime);
+  background: transparent;
+  text-align: left;
+  font-size: 0.79rem;
+}
+.climb-open strong { overflow-wrap: anywhere; }
+.climb-open svg { flex-shrink: 0; }
+.climb-open:hover strong { text-decoration: underline; }
+.climb-detail h1 { overflow-wrap: anywhere; }
+.climb-progress { display: flex; flex-wrap: wrap; align-items: center; gap: 12px; margin-bottom: 18px; }
+.climb-progress span { color: var(--muted); font-size: 0.85rem; }
+.quick-log { padding: 20px; margin-bottom: 20px; border: 1px solid var(--line); border-radius: 14px; background: var(--panel); }
+.quick-log h2, .climb-log-history h2 { margin: 0 0 8px; font-size: 1.15rem; }
+.quick-log p, .climb-log-history > p { color: var(--muted); font-size: 0.85rem; line-height: 1.5; }
+.quick-log-controls { display: flex; flex-wrap: wrap; align-items: center; gap: 20px; }
+.attempt-stepper { display: flex; gap: 12px; align-items: center; border: 0; padding: 0; margin: 0; }
+.attempt-stepper legend { margin-bottom: 8px; color: var(--muted); font-size: 0.75rem; }
+.attempt-stepper button { display: grid; place-items: center; width: 48px; height: 48px; border: 1px solid #414a3d; border-radius: 8px; background: #20271c; cursor: pointer; }
+.attempt-stepper button:disabled { opacity: 0.35; cursor: not-allowed; }
+.attempt-stepper output { min-width: 3ch; text-align: center; font-size: 1.5rem; font-weight: 800; font-variant-numeric: tabular-nums; }
+.completion-check { display: flex; align-items: center; gap: 10px; min-height: 48px; font-size: 0.9rem; cursor: pointer; }
+.completion-check input { width: 22px; height: 22px; accent-color: var(--lime); }
+.quick-log-controls > .chalk-action { margin-left: auto; }
+.quick-log .log-receipt, .log-completed { color: var(--lime); }
+.climb-log-history { margin-top: 28px; }
+.climb-log-history ul { list-style: none; margin: 0; padding: 0; }
+.climb-log-history li { display: flex; align-items: center; justify-content: space-between; gap: 12px; padding: 16px 0; border-bottom: 1px solid var(--line); font-size: 0.85rem; }
+.climb-log-history li > div { display: grid; gap: 5px; }
+.climb-log-history time { color: var(--muted); font-size: 0.75rem; }
+@media (max-width: 640px) {
+  .quick-log { padding: 16px; }
+  .quick-log-controls { gap: 14px; }
+  .quick-log-controls > .chalk-action { width: 100%; }
 }

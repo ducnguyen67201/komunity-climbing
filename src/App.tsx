@@ -1,4 +1,6 @@
 import {
+  useEffect,
+  useLayoutEffect,
   useMemo,
   useRef,
   useState,
@@ -36,7 +38,7 @@ import {
 import { applyHoldOutline, eraseHoldsAlongPath } from './wallOutline'
 
 type DetectionMode = 'ai' | 'local'
-type View = 'home' | 'source' | 'wall-editor' | 'wall-picker' | 'climb-editor' | 'library'
+type View = 'home' | 'source' | 'wall-editor' | 'wall-picker' | 'climb-editor' | 'climb-detail' | 'library'
 type EditableClimbStatus = 'draft' | 'submitted'
 type ClimbStatus = EditableClimbStatus | 'changes_requested' | 'approved'
 type ReviewDecision = 'approve' | 'request_changes'
@@ -62,6 +64,7 @@ type ClimbRecord = {
   ownerName: string
   wallName: string
   isOwner: boolean
+  logs: Array<{ id: string; attempts: number; completed: boolean; createdAt: string }>
   status: ClimbStatus
   review: {
     decision: ReviewDecision
@@ -95,6 +98,7 @@ function Icon({ name, size = 20 }: { name: string; size?: number }) {
     upload: <><path d="M12 16V4M7 9l5-5 5 5" /><path d="M5 15v4a1 1 0 0 0 1 1h12a1 1 0 0 0 1-1v-4" /></>,
     scan: <><path d="M4 8V5a1 1 0 0 1 1-1h3M16 4h3a1 1 0 0 1 1 1v3M20 16v3a1 1 0 0 1-1 1h-3M8 20H5a1 1 0 0 1-1-1v-3" /><path d="M8 12h8" /></>,
     sparkles: <><path d="m12 3 .8 2.2A5 5 0 0 0 16 8.3l2 .7-2 .7a5 5 0 0 0-3.2 3.1L12 15l-.8-2.2A5 5 0 0 0 8 9.7L6 9l2-.7a5 5 0 0 0 3.2-3.1L12 3Z" /><path d="m5 14 .5 1.4A3.2 3.2 0 0 0 7.6 17l1.4.5-1.4.5a3.2 3.2 0 0 0-2.1 1.6L5 21l-.5-1.4A3.2 3.2 0 0 0 2.4 18L1 17.5l1.4-.5a3.2 3.2 0 0 0 2.1-1.6L5 14Z" /></>,
+    minus: <path d="M5 12h14" />,
     plus: <path d="M12 5v14M5 12h14" />,
     undo: <path d="m9 7-5 5 5 5M4 12h10a6 6 0 0 1 6 6" />,
     close: <path d="m6 6 12 12M18 6 6 18" />,
@@ -104,6 +108,8 @@ function Icon({ name, size = 20 }: { name: string; size?: number }) {
     play: <path d="m9 7 8 5-8 5V7Z" />,
     video: <><rect x="3" y="6" width="13" height="12" rx="2" /><path d="m16 10 5-3v10l-5-3" /></>,
     target: <><circle cx="12" cy="12" r="8" /><circle cx="12" cy="12" r="3" /></>,
+    expand: <path d="M8 3H3v5M16 3h5v5M21 16v5h-5M8 21H3v-5" />,
+    collapse: <path d="M3 8h5V3M21 8h-5V3M16 21v-5h5M8 21v-5H3" />,
     zoomIn: <><circle cx="11" cy="11" r="7" /><path d="m16.5 16.5 4 4M8 11h6M11 8v6" /></>,
     zoomOut: <><circle cx="11" cy="11" r="7" /><path d="m16.5 16.5 4 4M8 11h6" /></>,
     reset: <><path d="M4 8V4h4M20 16v4h-4" /><path d="M5.5 5.5A8 8 0 0 1 19 9M18.5 18.5A8 8 0 0 1 5 15" /></>,
@@ -129,8 +135,81 @@ function LoginScreen({ configured, apiOnline, pending, error, onSignIn }: { conf
   )
 }
 
-function WallViewport({ frame, holds, correctionMode = null, onHoldTap, onDrawHold, onEraseStroke, instruction }: { frame: WallFrame; holds: DetectedHold[]; correctionMode?: 'draw' | 'erase' | null; onHoldTap: (id: string) => void; onDrawHold?: (points: Point[]) => void; onEraseStroke?: (points: Point[], brushRadius: number) => void; instruction: string }) {
+// Keep the editor mounted while expanding it so selections, undo and zoom survive.
+function EditorWorkspace({ className, children }: { className: string; children: ReactNode }) {
+  const [fullscreen, setFullscreen] = useState(false)
+  const editorRef = useRef<HTMLDivElement>(null)
+  const toggleRef = useRef<HTMLButtonElement>(null)
+
+  useEffect(() => {
+    if (!fullscreen || !editorRef.current) return
+    const editor = editorRef.current
+    const previousOverflow = document.body.style.overflow
+    document.body.style.overflow = 'hidden'
+    const background: Array<{ element: HTMLElement; inert: boolean }> = []
+    let current: HTMLElement = editor
+    while (current.parentElement) {
+      for (const sibling of current.parentElement.children) {
+        if (sibling !== current && sibling instanceof HTMLElement) {
+          background.push({ element: sibling, inert: sibling.inert })
+          sibling.inert = true
+        }
+      }
+      current = current.parentElement
+      if (current === document.body) break
+    }
+    toggleRef.current?.focus({ preventScroll: true })
+    function handleKey(event: globalThis.KeyboardEvent) {
+      if (event.key === 'Escape') {
+        event.preventDefault()
+        setFullscreen(false)
+      }
+      if (event.key !== 'Tab') return
+      const focusable = [...editor.querySelectorAll<HTMLElement>('button:not(:disabled), [tabindex="0"]')]
+        .filter((element) => element.getClientRects().length > 0)
+      const first = focusable[0]
+      const last = focusable.at(-1)
+      if (!editor.contains(document.activeElement)) {
+        event.preventDefault()
+        const target = event.shiftKey ? last : first
+        target?.focus()
+      } else if (event.shiftKey && document.activeElement === first) {
+        event.preventDefault()
+        last?.focus()
+      } else if (!event.shiftKey && document.activeElement === last) {
+        event.preventDefault()
+        first?.focus()
+      }
+    }
+    document.addEventListener('keydown', handleKey)
+    return () => {
+      document.body.style.overflow = previousOverflow
+      background.forEach(({ element, inert }) => { element.inert = inert })
+      document.removeEventListener('keydown', handleKey)
+      toggleRef.current?.focus({ preventScroll: true })
+    }
+  }, [fullscreen])
+
+  return (
+    <div ref={editorRef} className={`${className} editor-workspace${fullscreen ? ' is-fullscreen' : ''}`}
+      role={fullscreen ? 'dialog' : undefined} aria-modal={fullscreen || undefined}
+      aria-label={fullscreen ? 'Fullscreen hold editor' : undefined}>
+      <div className="editor-view-tools">
+        <button ref={toggleRef} type="button" aria-pressed={fullscreen} onClick={() => setFullscreen((value) => !value)}>
+          <Icon name={fullscreen ? 'collapse' : 'expand'} size={18} />
+          {fullscreen ? 'Exit fullscreen' : 'Fullscreen'}
+        </button>
+      </div>
+      {children}
+    </div>
+  )
+}
+
+function WallViewport({ frame, holds, readOnly = false, correctionMode = null, onHoldTap, onDrawHold, onEraseStroke, instruction }: { frame: WallFrame; holds: DetectedHold[]; readOnly?: boolean; correctionMode?: 'draw' | 'erase' | null; onHoldTap: (id: string) => void; onDrawHold?: (points: Point[]) => void; onEraseStroke?: (points: Point[], brushRadius: number) => void; instruction: string }) {
+  const wrapRef = useRef<HTMLDivElement>(null)
   const canvasRef = useRef<HTMLDivElement>(null)
+  const [canvasSize, setCanvasSize] = useState({ width: 0, height: 0 })
+  const canvasWidthRef = useRef(0)
   const activePointers = useRef(new Map<number, ViewportPoint>())
   const viewRef = useRef({ zoom: MIN_WALL_ZOOM, pan: { x: 0, y: 0 } })
   const gestureRef = useRef({ startX: 0, startY: 0, lastX: 0, lastY: 0, lastDistance: 0, lastMidpoint: { x: 0, y: 0 }, moved: false, holdId: null as string | null })
@@ -141,6 +220,33 @@ function WallViewport({ frame, holds, correctionMode = null, onHoldTap, onDrawHo
   const [draftPoints, setDraftPoints] = useState<Point[]>([])
   const drawMode = correctionMode === 'draw'
   const eraseMode = correctionMode === 'erase'
+
+  useLayoutEffect(() => {
+    const wrap = wrapRef.current
+    if (!wrap) return
+    const resize = () => {
+      const styles = getComputedStyle(wrap)
+      const availableWidth = Math.max(0, wrap.clientWidth - parseFloat(styles.paddingLeft) - parseFloat(styles.paddingRight))
+      const availableHeight = wrap.closest('.is-fullscreen')
+        ? Math.max(0, wrap.clientHeight - parseFloat(styles.paddingTop) - parseFloat(styles.paddingBottom))
+        : window.innerHeight * 0.65
+      const width = Math.min(availableWidth, availableHeight * frame.width / frame.height)
+      const height = width * frame.height / frame.width
+      const oldWidth = canvasWidthRef.current
+      const scale = oldWidth > 0 ? width / oldWidth : 1
+      canvasWidthRef.current = width
+      const current = viewRef.current
+      const nextPan = clampWallPan({ x: current.pan.x * scale, y: current.pan.y * scale }, current.zoom, width, height)
+      viewRef.current = { ...current, pan: nextPan }
+      setPan(nextPan)
+      setCanvasSize({ width, height })
+    }
+    resize()
+    const observer = new ResizeObserver(resize)
+    observer.observe(wrap)
+    window.addEventListener('resize', resize)
+    return () => { observer.disconnect(); window.removeEventListener('resize', resize) }
+  }, [frame.width, frame.height])
 
   function wallPoint(clientX: number, clientY: number) {
     const canvas = canvasRef.current
@@ -203,7 +309,7 @@ function WallViewport({ frame, holds, correctionMode = null, onHoldTap, onDrawHo
       if (!cancelled && eraseMode && onEraseStroke) onEraseStroke(completed, brushRadius)
       return
     }
-    if (isTap && holdId && !correctionMode) onHoldTap(holdId)
+    if (isTap && holdId && !correctionMode && !readOnly) onHoldTap(holdId)
   }
 
   function pointerDown(event: PointerEvent<HTMLDivElement>) {
@@ -296,17 +402,18 @@ function WallViewport({ frame, holds, correctionMode = null, onHoldTap, onDrawHo
   }
 
   return (
-    <div className="wall-canvas-wrap"><div ref={canvasRef} className={`wall-canvas${drawMode ? ' drawing' : ''}${eraseMode ? ' erasing' : ''}${zoom > 1 ? ' zoomed' : ''}${isPanning ? ' panning' : ''}`} style={{ aspectRatio: `${frame.width} / ${frame.height}` }} role="region" aria-label={`Climbing wall. ${instruction}`} aria-keyshortcuts="= - 0 Escape ArrowUp ArrowDown ArrowLeft ArrowRight" tabIndex={0} onPointerDown={pointerDown} onPointerMove={pointerMove} onPointerUp={endPointer} onPointerCancel={(event) => endPointer(event, true)} onLostPointerCapture={(event) => endPointer(event, true)} onWheel={wheel} onKeyDown={keyDown}>
-      <div className="wall-stage" style={{ transform: `translate3d(${pan.x}px, ${pan.y}px, 0) scale(${zoom})` }}><img src={frame.dataUrl} alt="Scanned climbing wall" /><svg viewBox="0 0 100 100" preserveAspectRatio="none" aria-label="Mapped climbing holds">{holds.map((hold, index) => { const points = hold.points.map(({ x, y }) => `${x},${y}`).join(' '); return <g key={hold.id} className={hold.role ? `selected-hold role-${hold.role}` : 'candidate-hold'} data-hold-id={hold.id} role="button" tabIndex={correctionMode ? -1 : 0} aria-label={`${hold.role ? `${hold.role} hold` : 'Mapped hold'} ${index + 1}`} aria-pressed={Boolean(hold.role)} onKeyDown={(event) => { if (!correctionMode && (event.key === 'Enter' || event.key === ' ')) { event.preventDefault(); onHoldTap(hold.id) } }}><polygon className="hold-hit-area" points={points} />{hold.role && <polygon className="hold-halo" points={points} />}<polygon className="hold-shape" points={points} />{hold.role && <circle className="hold-marker" cx={hold.center.x} cy={hold.center.y} r="1.25" />}</g> })}{drawMode && draftPoints.length > 1 && <polygon className="draft-hold-shape" points={draftPath} />}{eraseMode && draftPoints.length > 0 && <g className="eraser-preview"><polyline points={draftPath} style={{ strokeWidth: ERASER_RADIUS_PX * 2 }} /><ellipse cx={draftPoints.at(-1)!.x} cy={draftPoints.at(-1)!.y} rx={previewRadius} ry={previewRadius * (frame.width / frame.height)} /></g>}</svg></div>
-      <div className="zoom-controls" role="group" aria-label="Wall zoom controls" onPointerDown={(event) => event.stopPropagation()}><button type="button" aria-label="Zoom out" disabled={zoom <= 1} onClick={() => zoomAt(viewRef.current.zoom - WALL_ZOOM_STEP)}><Icon name="zoomOut" size={17} /></button><output aria-live="polite">{Math.round(zoom * 100)}%</output><button type="button" aria-label="Zoom in" disabled={zoom >= MAX_WALL_ZOOM} onClick={() => zoomAt(viewRef.current.zoom + WALL_ZOOM_STEP)}><Icon name="zoomIn" size={17} /></button><button type="button" aria-label="Reset zoom" disabled={zoom <= 1 && pan.x === 0 && pan.y === 0} onClick={() => applyViewport(1, { x: 0, y: 0 })}><Icon name="reset" size={16} /></button></div>
+    <div ref={wrapRef} className="wall-canvas-wrap"><div ref={canvasRef} className={`wall-canvas${drawMode ? ' drawing' : ''}${eraseMode ? ' erasing' : ''}${zoom > 1 ? ' zoomed' : ''}${isPanning ? ' panning' : ''}`} style={{ width: canvasSize.width, height: canvasSize.height, aspectRatio: `${frame.width} / ${frame.height}` }} role="region" aria-label={`Climbing wall. ${instruction}`} aria-keyshortcuts="= - 0 Escape ArrowUp ArrowDown ArrowLeft ArrowRight" tabIndex={0} onPointerDown={pointerDown} onPointerMove={pointerMove} onPointerUp={endPointer} onPointerCancel={(event) => endPointer(event, true)} onLostPointerCapture={(event) => endPointer(event, true)} onWheel={wheel} onKeyDown={keyDown}>
+      <div className="wall-stage" style={{ transform: `translate3d(${pan.x}px, ${pan.y}px, 0) scale(${zoom})` }}><img src={frame.dataUrl} alt="Scanned climbing wall" /><svg viewBox="0 0 100 100" preserveAspectRatio="none" aria-label="Mapped climbing holds">{holds.map((hold, index) => { const points = hold.points.map(({ x, y }) => `${x},${y}`).join(' '); return <g key={hold.id} className={hold.role ? `selected-hold role-${hold.role}` : 'candidate-hold'} data-hold-id={hold.id} role={readOnly ? "img" : "button"} tabIndex={correctionMode || readOnly ? -1 : 0} aria-label={`${hold.role ? `${hold.role} hold` : 'Mapped hold'} ${index + 1}`} aria-pressed={readOnly ? undefined : Boolean(hold.role)} onKeyDown={(event) => { if (!readOnly && !correctionMode && (event.key === 'Enter' || event.key === ' ')) { event.preventDefault(); onHoldTap(hold.id) } }}><polygon className="hold-hit-area" points={points} />{hold.role && <polygon className="hold-halo" points={points} />}<polygon className="hold-shape" points={points} />{hold.role && <circle className="hold-marker" cx={hold.center.x} cy={hold.center.y} r="1.25" />}</g> })}{drawMode && draftPoints.length > 1 && <polygon className="draft-hold-shape" points={draftPath} />}{eraseMode && draftPoints.length > 0 && <g className="eraser-preview"><polyline points={draftPath} style={{ strokeWidth: ERASER_RADIUS_PX * 2 }} /><ellipse cx={draftPoints.at(-1)!.x} cy={draftPoints.at(-1)!.y} rx={previewRadius} ry={previewRadius * (frame.width / frame.height)} /></g>}</svg></div>
       {drawMode && <div className="add-instruction"><Icon name="edit" size={16} /> Draw around the whole hold · lift to close</div>}
       {eraseMode && <div className="add-instruction erase"><Icon name="eraser" size={16} /> Rub over wrong outlines · lift to erase</div>}
-    </div></div>
+    </div>
+      <div className="zoom-controls" role="group" aria-label="Wall zoom controls" onPointerDown={(event) => event.stopPropagation()}><button type="button" aria-label="Zoom out" disabled={zoom <= 1} onClick={() => zoomAt(viewRef.current.zoom - WALL_ZOOM_STEP)}><Icon name="zoomOut" size={17} /></button><output aria-live="polite">{Math.round(zoom * 100)}%</output><button type="button" aria-label="Zoom in" disabled={zoom >= MAX_WALL_ZOOM} onClick={() => zoomAt(viewRef.current.zoom + WALL_ZOOM_STEP)}><Icon name="zoomIn" size={17} /></button><button type="button" aria-label="Reset zoom" disabled={zoom <= 1 && pan.x === 0 && pan.y === 0} onClick={() => applyViewport(1, { x: 0, y: 0 })}><Icon name="reset" size={16} /></button></div>
+    </div>
   )
 }
 
-function CreateHome({ wallCount, onAddWall, onSetClimb }: { wallCount: number; onAddWall: () => void; onSetClimb: () => void }) {
-  return <section className="create-home"><div className="create-copy"><p className="eyebrow">Create</p><h1>What are we setting?</h1><p>Save a wall once. Reuse it for every climb you set there.</p><div className="choice-stack"><button className="choice-card primary" type="button" onClick={onAddWall}><span><Icon name="plus" /><b>Add a wall</b><small>Scan, check the holds, and save it</small></span><Icon name="arrow" /></button><button className="choice-card" type="button" onClick={onSetClimb}><span><Icon name="target" /><b>Set a climb</b><small>{wallCount ? `Choose from ${wallCount} saved wall${wallCount === 1 ? '' : 's'}` : 'Add a wall first'}</small></span><Icon name="arrow" /></button></div></div><div className="topo-hero" aria-hidden="true"><span className="topo-label">SAVE THE WALL</span><div className="topo-line" /><strong>SET<br />MANY<br />CLIMBS</strong></div></section>
+function CreateHome({ wallCount, onAddWall, onSetClimb, onViewClimbs }: { wallCount: number; onAddWall: () => void; onSetClimb: () => void; onViewClimbs: () => void }) {
+  return <section className="create-home"><div className="create-copy"><p className="eyebrow">Create</p><h1>What are we setting?</h1><p>Save a wall once. Reuse it for every climb you set there.</p><div className="choice-stack"><button className="choice-card primary" type="button" onClick={onAddWall}><span><Icon name="plus" /><b>Add a wall</b><small>Scan, check the holds, and save it</small></span><Icon name="arrow" /></button><button className="choice-card" type="button" onClick={onSetClimb}><span><Icon name="target" /><b>Set a climb</b><small>{wallCount ? `Choose from ${wallCount} saved wall${wallCount === 1 ? '' : 's'}` : 'Add a wall first'}</small></span><Icon name="arrow" /></button><button className="choice-card" type="button" onClick={onViewClimbs}><span><Icon name="book" /><b>View all climbs</b><small>Browse your saved climbs in the topo book</small></span><Icon name="arrow" /></button></div></div><div className="topo-hero" aria-hidden="true"><span className="topo-label">SAVE THE WALL</span><div className="topo-line" /><strong>SET<br />MANY<br />CLIMBS</strong></div></section>
 }
 
 function WallSource({ onCamera, onRecord, onUpload, onDemo, onCancel }: { onCamera: () => void; onRecord: () => void; onUpload: () => void; onDemo: () => void; onCancel: () => void }) {
@@ -357,7 +464,7 @@ function WallForm({ frame, initialHolds, initialName, detectionMode, editing, pe
   const submit = (event: FormEvent) => { event.preventDefault(); onSave(name, holds) }
   const drawMode = correctionTool === 'draw'
   const eraseMode = correctionTool === 'erase'
-  return <section className="flow-shell"><header className="flow-heading"><div><button className="text-button" type="button" onClick={onCancel}>← Cancel</button><p className="eyebrow">{editing ? 'Edit wall' : 'New wall'}</p><h1>{editing ? 'Update this wall' : 'Make this wall reusable'}</h1></div><span className="mapped-pill"><span />{holds.length} holds · {detectionMode === 'ai' ? 'AI assisted' : 'local scan'}</span></header><div className="wall-form-grid"><div className="wall-step"><div className="step-copy"><span>1</span><div><h2>Check the holds</h2><p>Draw around missed holds, or rub the eraser over noisy outlines. Volumes stay part of the wall.</p></div></div><div className="correction-tools"><button className={drawMode ? 'active' : ''} type="button" aria-pressed={drawMode} onClick={() => { setCorrectionTool((current) => current === 'draw' ? null : 'draw'); setCorrectionStatus('') }}><Icon name="edit" /> Draw outline</button><button className={eraseMode ? 'active' : ''} type="button" aria-pressed={eraseMode} onClick={() => { setCorrectionTool((current) => current === 'erase' ? null : 'erase'); setCorrectionStatus('') }}><Icon name="eraser" /> Eraser</button><button type="button" disabled={!history.length} onClick={() => { undo(); setCorrectionStatus('Last correction undone.') }}><Icon name="undo" /> Undo</button><span className="correction-status" aria-live="polite">{correctionStatus}</span></div><WallViewport frame={frame} holds={holds} correctionMode={correctionTool} instruction={drawMode ? 'Draw around the whole hold. Lift to close the outline. Use two fingers to zoom or move.' : eraseMode ? 'Rub over incorrect outlines. Lift to erase them.' : 'Choose Draw outline or Eraser to correct the scan.'} onHoldTap={() => {}} onDrawHold={drawOutline} onEraseStroke={eraseStroke} /></div><form className="name-card" onSubmit={submit}><span className="tape-label">2 · Name this wall</span><label>Wall name<input value={name} onChange={(event) => setName(event.target.value)} placeholder="e.g. North cave" maxLength={80} required autoFocus /></label><p>This is the name setters will choose when they create a climb.</p>{error && <p className="error" role="alert">{error}</p>}<button className="chalk-action" type="submit" disabled={pending || holds.length === 0}>{pending ? 'Saving wall…' : editing ? 'Save changes' : 'Save wall'}<Icon name="arrow" /></button></form></div></section>
+  return <section className="flow-shell"><header className="flow-heading"><div><button className="text-button" type="button" onClick={onCancel}>← Cancel</button><p className="eyebrow">{editing ? 'Edit wall' : 'New wall'}</p><h1>{editing ? 'Update this wall' : 'Make this wall reusable'}</h1></div><span className="mapped-pill"><span />{holds.length} holds · {detectionMode === 'ai' ? 'AI assisted' : 'local scan'}</span></header><div className="wall-form-grid"><EditorWorkspace className="wall-step"><div className="step-copy"><span>1</span><div><h2>Check the holds</h2><p>Draw around missed holds, or rub the eraser over noisy outlines. Volumes stay part of the wall.</p></div></div><div className="correction-tools"><button className={drawMode ? 'active' : ''} type="button" aria-pressed={drawMode} onClick={() => { setCorrectionTool((current) => current === 'draw' ? null : 'draw'); setCorrectionStatus('') }}><Icon name="edit" /> Draw outline</button><button className={eraseMode ? 'active' : ''} type="button" aria-pressed={eraseMode} onClick={() => { setCorrectionTool((current) => current === 'erase' ? null : 'erase'); setCorrectionStatus('') }}><Icon name="eraser" /> Eraser</button><button type="button" disabled={!history.length} onClick={() => { undo(); setCorrectionStatus('Last correction undone.') }}><Icon name="undo" /> Undo</button><span className="correction-status" aria-live="polite">{correctionStatus}</span></div><WallViewport frame={frame} holds={holds} correctionMode={correctionTool} instruction={drawMode ? 'Draw around the whole hold. Lift to close the outline. Use two fingers to zoom or move.' : eraseMode ? 'Rub over incorrect outlines. Lift to erase them.' : 'Choose Draw outline or Eraser to correct the scan.'} onHoldTap={() => {}} onDrawHold={drawOutline} onEraseStroke={eraseStroke} /></EditorWorkspace><form className="name-card" onSubmit={submit}><span className="tape-label">2 · Name this wall</span><label>Wall name<input value={name} onChange={(event) => setName(event.target.value)} placeholder="e.g. North cave" maxLength={80} required autoFocus /></label><p>This is the name setters will choose when they create a climb.</p>{error && <p className="error" role="alert">{error}</p>}<button className="chalk-action" type="submit" disabled={pending || holds.length === 0}>{pending ? 'Saving wall…' : editing ? 'Save changes' : 'Save wall'}<Icon name="arrow" /></button></form></div></section>
 }
 
 function WallPicker({ walls, onChoose, onAdd, onCancel }: { walls: WallRecord[]; onChoose: (wall: WallRecord) => void; onAdd: () => void; onCancel: () => void }) {
@@ -493,7 +600,7 @@ function ClimbForm({
             </select>
           </label>
         </div>
-        <div className="climb-canvas-card">
+        <EditorWorkspace className="climb-canvas-card">
           <div className="chalkline-rail" role="radiogroup" aria-label="Hold role">
             {roleOptions.map((option) => (
               <button
@@ -550,7 +657,7 @@ function ClimbForm({
               )
             }
           />
-        </div>
+        </EditorWorkspace>
         <div className="chalkline-submit">
           <div>
             <strong>{selected.length} holds marked</strong>
@@ -590,6 +697,84 @@ function ClimbForm({
           </p>
         )}
       </form>
+    </section>
+  )
+}
+
+function ClimbDetail({ climb, wall, onBack }: { climb: ClimbRecord; wall: WallRecord; onBack: () => void }) {
+  const [attempts, setAttempts] = useState(1)
+  const [completed, setCompleted] = useState(false)
+  const [receipt, setReceipt] = useState('')
+  const savingRef = useRef(false)
+  const entryRef = useRef<{ id: string; attempts: number; completed: boolean } | null>(null)
+  const logAttempts = useMutation(trpc.climbs.logAttempts.mutationOptions())
+  const logs = climb.logs
+  const totalAttempts = logs.reduce((total, entry) => total + entry.attempts, 0)
+  const hasCompleted = logs.some((entry) => entry.completed)
+  const roles = new Map(climb.assignments.map(({ holdId, role }) => [holdId, role]))
+  const holds = wall.holds.filter((hold) => roles.has(hold.id)).map((hold) => ({ ...hold, role: roles.get(hold.id)! }))
+
+  async function quickLog(event: FormEvent) {
+    event.preventDefault()
+    if (savingRef.current) return
+    savingRef.current = true
+    setReceipt('')
+    if (!entryRef.current || entryRef.current.attempts !== attempts || entryRef.current.completed !== completed) {
+      entryRef.current = { id: crypto.randomUUID(), attempts, completed }
+    }
+    try {
+      const saved = await logAttempts.mutateAsync({ id: climb.id, entryId: entryRef.current.id, attempts, completed })
+      entryRef.current = null
+      setAttempts(1)
+      setCompleted(false)
+      setReceipt(`Logged ${saved.attempts} attempt${saved.attempts === 1 ? '' : 's'} · ${saved.completed ? 'Completed' : 'Not completed yet'}.`)
+      await queryClient.invalidateQueries({ queryKey: trpc.climbs.list.queryKey() })
+    } catch {
+      // Keep the form and entry id so a failed request can be retried safely.
+    } finally {
+      savingRef.current = false
+    }
+  }
+
+  return (
+    <section className="flow-shell climb-detail">
+      <header className="flow-heading compact">
+        <div>
+          <button className="text-button" type="button" onClick={onBack}>← All climbs</button>
+          <p className="eyebrow">{wall.name} · {climb.grade || 'Ungraded'}</p>
+          <h1>{climb.name || 'Untitled draft'}</h1>
+        </div>
+        <span className={`climb-status status-${climb.status}`}>{climbStatusLabels[climb.status]}</span>
+      </header>
+      <div className="climb-progress" aria-label="Your progress">
+        <strong>{totalAttempts} total attempt{totalAttempts === 1 ? '' : 's'}</strong>
+        <span>{hasCompleted ? 'Completed' : 'Not completed yet'}</span>
+      </div>
+      <form className="quick-log" onSubmit={quickLog}>
+        <div><h2>Quick log</h2><p>Record this session’s attempts and whether you completed the climb.</p></div>
+        <div className="quick-log-controls">
+          <fieldset className="attempt-stepper" disabled={logAttempts.isPending}>
+            <legend>Attempts this session</legend>
+            <button type="button" aria-label="Decrease attempts" disabled={attempts <= 1} onClick={() => setAttempts((count) => count - 1)}><Icon name="minus" /></button>
+            <output aria-live="polite" aria-label="Attempts this session">{attempts}</output>
+            <button type="button" aria-label="Increase attempts" disabled={attempts >= 999} onClick={() => setAttempts((count) => count + 1)}><Icon name="plus" /></button>
+          </fieldset>
+          <label className="completion-check"><input type="checkbox" checked={completed} disabled={logAttempts.isPending} onChange={(event) => setCompleted(event.target.checked)} />Completed this climb</label>
+          <button className="chalk-action" type="submit" disabled={logAttempts.isPending}>{logAttempts.isPending ? 'Saving…' : 'Quick log'}<Icon name="check" /></button>
+        </div>
+        {receipt && <p className="log-receipt" role="status">{receipt}</p>}
+        {logAttempts.error && <p className="error" role="alert">Couldn’t save your log. {logAttempts.error.message} Try again.</p>}
+      </form>
+      <EditorWorkspace className="climb-canvas-card">
+        <WallViewport frame={{ dataUrl: wall.imageDataUrl, width: wall.imageWidth, height: wall.imageHeight, sourceType: wall.sourceType }} holds={holds} readOnly instruction="View the marked holds. Zoom in to see the route." onHoldTap={() => {}} />
+      </EditorWorkspace>
+      <section className="climb-log-history" aria-labelledby="log-history-title">
+        <h2 id="log-history-title">Your log</h2>
+        {logs.length === 0 ? <p>No attempts logged yet.</p> : <ul>{logs.map((entry) => <li key={entry.id}>
+          <div><strong>{entry.attempts} attempt{entry.attempts === 1 ? '' : 's'}</strong><time dateTime={entry.createdAt}>{new Date(entry.createdAt).toLocaleString(undefined, { dateStyle: 'medium', timeStyle: 'short' })}</time></div>
+          <span className={entry.completed ? 'log-completed' : ''}>{entry.completed ? 'Completed' : 'Not completed'}</span>
+        </li>)}</ul>}
+      </section>
     </section>
   )
 }
@@ -689,6 +874,7 @@ function TopoBook({
   onEditWall,
   onDeleteWall,
   onEditClimb,
+  onOpenClimb,
   onDeleteClimb,
   onReview,
 }: {
@@ -703,6 +889,7 @@ function TopoBook({
   onSetClimb: (wall: WallRecord) => void
   onEditWall: (wall: WallRecord) => void
   onDeleteWall: (wall: WallRecord) => void
+  onOpenClimb: (climb: ClimbRecord) => void
   onEditClimb: (climb: ClimbRecord) => void
   onDeleteClimb: (climb: ClimbRecord) => void
   onReview: (
@@ -806,7 +993,7 @@ function TopoBook({
                     {wallClimbs.map((climb) => (
                       <div className="climb-row" key={climb.id}>
                         <span>
-                          <strong>{climb.name || 'Untitled draft'}</strong>
+                          <button className="climb-open" type="button" aria-label={`Open ${climb.name || 'Untitled draft'}`} onClick={() => onOpenClimb(climb)}><strong>{climb.name || 'Untitled draft'}</strong><Icon name="arrow" size={16} /></button>
                           <small>
                             {climb.assignments.length} marked holds ·{' '}
                             <span className={`climb-status status-${climb.status}`}>
@@ -893,6 +1080,7 @@ function ClimbingApp({ user, canReview, authPending, onSignOut }: { user: AuthUs
   const [editingWall, setEditingWall] = useState<WallRecord | null>(null)
   const [selectedWall, setSelectedWall] = useState<WallRecord | null>(null)
   const [editingClimb, setEditingClimb] = useState<ClimbRecord | null>(null)
+  const [openClimbId, setOpenClimbId] = useState<string | null>(null)
   const [isAnalyzing, setIsAnalyzing] = useState(false)
   const [error, setError] = useState('')
   const [notice, setNotice] = useState('')
@@ -901,6 +1089,8 @@ function ClimbingApp({ user, canReview, authPending, onSignOut }: { user: AuthUs
   const climbQuery = useQuery(trpc.climbs.list.queryOptions())
   const walls = (wallQuery.data ?? []) as WallRecord[]
   const climbs = (climbQuery.data ?? []) as ClimbRecord[]
+  const openClimb = climbs.find((climb) => climb.id === openClimbId)
+  const openClimbWall = walls.find((wall) => wall.id === openClimb?.wallId)
   const refresh = async () => { await Promise.all([queryClient.invalidateQueries({ queryKey: trpc.walls.list.queryKey() }), queryClient.invalidateQueries({ queryKey: trpc.climbs.list.queryKey() })]) }
   const aiDetection = useMutation(trpc.wall.detectHolds.mutationOptions())
   const createWall = useMutation(trpc.walls.create.mutationOptions({ onSuccess: async (wall) => { await refresh(); setNotice(`${wall.name} saved. It is ready for climbs.`); setView('library') } }))
@@ -911,7 +1101,7 @@ function ClimbingApp({ user, canReview, authPending, onSignOut }: { user: AuthUs
   const deleteClimb = useMutation(trpc.climbs.delete.mutationOptions({ onSuccess: refresh }))
   const reviewClimb = useMutation(trpc.climbs.review.mutationOptions({ onSuccess: async (climb) => { await refresh(); setNotice(climb.status === 'approved' ? `${climb.name} approved.` : `Changes requested for ${climb.name}.`) } }))
 
-  function resetDraft() { setFrame(null); setDetectedHolds([]); setEditingWall(null); setSelectedWall(null); setEditingClimb(null); setError(''); createWall.reset(); updateWall.reset(); createClimb.reset(); updateClimb.reset(); reviewClimb.reset() }
+  function resetDraft() { setFrame(null); setDetectedHolds([]); setEditingWall(null); setSelectedWall(null); setEditingClimb(null); setOpenClimbId(null); setError(''); createWall.reset(); updateWall.reset(); createClimb.reset(); updateClimb.reset(); reviewClimb.reset() }
   function go(next: View) { resetDraft(); setNotice(''); setView(next); window.scrollTo({ top: 0, behavior: 'smooth' }) }
 
   async function processFrame(nextFrame: WallFrame) {
@@ -958,15 +1148,16 @@ function ClimbingApp({ user, canReview, authPending, onSignOut }: { user: AuthUs
     }
   }
 
-  const activeNav = view === 'library' ? 'library' : 'create'
+  const activeNav = view === 'library' || view === 'climb-detail' ? 'library' : 'create'
   return <main className="app-shell"><header className="site-header"><Brand /><nav aria-label="Primary navigation"><button className={`nav-item${activeNav === 'create' ? ' active' : ''}`} type="button" onClick={() => go('home')}>Create</button><button className={`nav-item${activeNav === 'library' ? ' active' : ''}`} type="button" onClick={() => go('library')}>Topo book</button></nav><div className="header-account"><div className="header-meta"><span className={`api-light${health.data ? ' online' : ''}`} /><span>{health.data?.ai.enabled ? 'AI scan ready' : 'Local scan'}</span></div><div className="user-menu">{user.image && <img src={user.image} alt="" referrerPolicy="no-referrer" />}<span>{user.name ?? user.email ?? 'Climber'}</span><button type="button" disabled={authPending} onClick={onSignOut}>Sign out</button></div></div></header>
     <input ref={cameraInput} className="visually-hidden" type="file" accept="image/*" capture="environment" onChange={handleFile} /><input ref={videoInput} className="visually-hidden" type="file" accept="video/*" capture="environment" onChange={handleFile} /><input ref={uploadInput} className="visually-hidden" type="file" accept="image/*,video/*" onChange={handleFile} />
-    {view === 'home' && <CreateHome wallCount={walls.length} onAddWall={() => setView('source')} onSetClimb={() => setView('wall-picker')} />}
+    {view === 'home' && <CreateHome wallCount={walls.length} onAddWall={() => setView('source')} onSetClimb={() => setView('wall-picker')} onViewClimbs={() => go('library')} />}
     {view === 'source' && <WallSource onCamera={() => cameraInput.current?.click()} onRecord={() => videoInput.current?.click()} onUpload={() => uploadInput.current?.click()} onDemo={() => void processFrame(createDemoWall())} onCancel={() => go('home')} />}
     {view === 'wall-editor' && frame && <WallForm key={editingWall?.id ?? frame.dataUrl.slice(-24)} frame={frame} initialHolds={detectedHolds} initialName={editingWall?.name ?? ''} detectionMode={detectionMode} editing={Boolean(editingWall)} pending={createWall.isPending || updateWall.isPending} error={createWall.error?.message ?? updateWall.error?.message} onCancel={() => go(editingWall ? 'library' : 'source')} onSave={saveWall} />}
     {view === 'wall-picker' && <WallPicker walls={walls} onChoose={(wall) => startClimb(wall)} onAdd={() => setView('source')} onCancel={() => go('home')} />}
     {view === 'climb-editor' && selectedWall && <ClimbForm key={editingClimb?.id ?? selectedWall.id} wall={selectedWall} climb={editingClimb ?? undefined} pending={createClimb.isPending || updateClimb.isPending} error={createClimb.error?.message ?? updateClimb.error?.message} onCancel={() => go('library')} onSave={(details) => { if (editingClimb) updateClimb.mutate({ id: editingClimb.id, ...details }); else createClimb.mutate({ wallId: selectedWall.id, ...details }) }} />}
-    {view === 'library' && <TopoBook walls={walls} climbs={climbs} notice={notice} canReview={canReview} reviewTargetId={reviewClimb.variables?.id} reviewPending={reviewClimb.isPending} reviewError={reviewClimb.error?.message} onAddWall={() => go('source')} onSetClimb={(wall) => startClimb(wall)} onEditWall={editWall} onDeleteWall={(wall) => { const count = climbs.filter((climb) => climb.isOwner && climb.wallId === wall.id).length; if (window.confirm(`Delete ${wall.name}? This will also delete ${count} climb${count === 1 ? '' : 's'} on it.`)) deleteWall.mutate({ id: wall.id }) }} onEditClimb={(climb) => { const wall = walls.find((item) => item.id === climb.wallId); if (wall) startClimb(wall, climb) }} onDeleteClimb={(climb) => { if (window.confirm(`Delete ${climb.name || 'this draft'}?`)) deleteClimb.mutate({ id: climb.id }) }} onReview={(climb, decision, rating, comment) => reviewClimb.mutate({ id: climb.id, decision, rating, comment })} />}
+    {view === 'climb-detail' && openClimb && openClimbWall && <ClimbDetail key={openClimb.id} climb={openClimb} wall={openClimbWall} onBack={() => go('library')} />}
+    {view === 'library' && <TopoBook walls={walls} climbs={climbs} notice={notice} canReview={canReview} reviewTargetId={reviewClimb.variables?.id} reviewPending={reviewClimb.isPending} reviewError={reviewClimb.error?.message} onAddWall={() => go('source')} onSetClimb={(wall) => startClimb(wall)} onEditWall={editWall} onOpenClimb={(climb) => { setOpenClimbId(climb.id); setView('climb-detail'); window.scrollTo({ top: 0 }) }} onDeleteWall={(wall) => { const count = climbs.filter((climb) => climb.isOwner && climb.wallId === wall.id).length; if (window.confirm(`Delete ${wall.name}? This will also delete ${count} climb${count === 1 ? '' : 's'} on it.`)) deleteWall.mutate({ id: wall.id }) }} onEditClimb={(climb) => { const wall = walls.find((item) => item.id === climb.wallId); if (wall) startClimb(wall, climb) }} onDeleteClimb={(climb) => { if (window.confirm(`Delete ${climb.name || 'this draft'}?`)) deleteClimb.mutate({ id: climb.id }) }} onReview={(climb, decision, rating, comment) => reviewClimb.mutate({ id: climb.id, decision, rating, comment })} />}
     {(isAnalyzing || error) && <div className="overlay" role={error ? 'alertdialog' : 'dialog'} aria-modal="true"><div className="analysis-card">{error ? <><button className="close-button" type="button" onClick={() => setError('')} aria-label="Close"><Icon name="close" /></button><span className="analysis-icon error-icon"><Icon name="image" size={30} /></span><h2>We couldn’t scan that</h2><p>{error}</p><button className="primary-action" type="button" onClick={() => setError('')}>Try another file</button></> : <><span className="analysis-icon"><Icon name="scan" size={30} /></span><h2>Mapping your wall</h2><p>Finding individual holds and tracing their edges…</p><span className="progress-track"><span /></span></>}</div></div>}
     <footer><Brand /><p>Save the wall. Set the climb.</p></footer></main>
 }
