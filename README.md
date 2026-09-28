@@ -78,6 +78,10 @@ npm run start:api # run the API without watch mode
 - Reviewers can give a one-to-five-star rating, approve a climb, or request
   changes with feedback. A reviewer cannot review their own climb.
 - Approved climbs are locked to preserve the review record.
+- Open a saved climb by its name in the topo book. Use the plus/minus controls
+  to select attempts, mark whether you completed it, then choose Quick log.
+  Your private log history and total attempts remain separate from route edits
+  and reviews, including on approved climbs.
 
 ## Where to work
 
@@ -88,7 +92,7 @@ npm run start:api # run the API without watch mode
 - `server/index.ts` — Express entry point
 
 The demo data is intentionally in memory and resets whenever the API restarts.
-The save/update/review workflow persists for the life of the API process; add a
+Climbs, reviews, and attempt logs persist for the life of the API process; add a
 database before treating it as durable production storage.
 
 ## Railway deployment

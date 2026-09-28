@@ -109,6 +109,20 @@ type Wall = z.infer<typeof wallCreateInput> & {
   updatedAt: string
 }
 
+const climbLogInput = z.object({
+  id: z.string().uuid(),
+  entryId: z.string().uuid(),
+  attempts: z.number().int().min(1).max(999),
+  completed: z.boolean(),
+})
+
+type ClimbLog = {
+  id: string
+  attempts: number
+  completed: boolean
+  createdAt: string
+}
+
 type Climb = {
   id: string
   wallId: string
@@ -117,6 +131,7 @@ type Climb = {
   assignments: Array<z.infer<typeof assignmentInput>>
   ownerEmail: string
   ownerName: string
+  logs: ClimbLog[]
   status: z.infer<typeof climbStatus>
   review: {
     decision: z.infer<typeof reviewClimbInput>['decision']
@@ -149,6 +164,7 @@ function publicClimb(climb: Climb, viewerEmail: string) {
     assignments: climb.assignments,
     ownerName: climb.ownerName,
     isOwner: climb.ownerEmail === viewerEmail,
+    logs: climb.ownerEmail === viewerEmail ? climb.logs : [],
     status: climb.status,
     review: climb.review
       ? {
@@ -362,6 +378,7 @@ export const appRouter = t.router({
           ownerEmail: ctx.ownerEmail,
           ownerName: ctx.ownerName,
           ...input,
+          logs: [],
           review: null,
           createdAt: now,
           updatedAt: now,
@@ -390,6 +407,26 @@ export const appRouter = t.router({
         climb.review = null
         climb.updatedAt = new Date().toISOString()
         return publicClimb(climb, ctx.ownerEmail)
+      }),
+    logAttempts: protectedProcedure
+      .input(climbLogInput)
+      .mutation(({ ctx, input }) => {
+        const climb = findClimb(ctx.ownerEmail, input.id)
+        const existing = climb.logs.find((entry) => entry.id === input.entryId)
+        if (existing) {
+          if (existing.attempts !== input.attempts || existing.completed !== input.completed) {
+            throw new TRPCError({ code: 'CONFLICT', message: 'This log has already been saved with different details' })
+          }
+          return existing
+        }
+        const entry: ClimbLog = {
+          id: input.entryId,
+          attempts: input.attempts,
+          completed: input.completed,
+          createdAt: new Date().toISOString(),
+        }
+        climb.logs.unshift(entry)
+        return entry
       }),
     review: protectedProcedure
       .input(reviewClimbInput)
